@@ -888,6 +888,16 @@ function solveMathChallengeBlob() {
                         return solveMathInteractiveSpinner(challengeContainer, mathWebIframe);
                     }
                 }
+                
+                // NEW: Check for Factor Tree type
+                // Factor Tree has "tokenTreeIndices" in OUTPUT_VARS and contains "FactorTree" in srcdoc
+                if (outputVars && 'tokenTreeIndices' in outputVars) {
+                    const srcdoc = mathWebIframe.getAttribute('srcdoc');
+                    if (srcdoc && srcdoc.includes('FactorTree')) {
+                        LOG('solveMathChallengeBlob: detected FACTOR TREE type (tokenTreeIndices found)');
+                        return solveFactorTree(challengeContainer, mathWebIframe);
+                    }
+                }
             }
         } catch (e) {
             LOG_DEBUG('solveMathChallengeBlob: error checking iframe type:', e.message);
@@ -2776,6 +2786,202 @@ function solveMathInteractiveSpinner(challengeContainer, iframe) {
         numerator: numerator,
         denominator: denominator,
         selectedSegments: numerator,
+        success: success
+    };
+}
+
+/**
+ * Solve Factor Tree challenge
+ * The challenge has a tree where some nodes are blank (value: null)
+ * User must place the correct tokens (numbers) into the blanks
+ * The tree represents multiplication: parent = left * right
+ * 
+ * OUTPUT_VARS.tokenTreeIndices is an array where:
+ * - Each element corresponds to each original token
+ * - Value is the 1-based tree index where that token is placed
+ * - 0 means the token is not used
+ * 
+ * Tree indices use level-order (BFS) numbering:
+ * - Root = 1
+ * - Left child of node i = 2*i
+ * - Right child of node i = 2*i + 1
+ */
+function solveFactorTree(challengeContainer, iframe) {
+    LOG('solveFactorTree: starting');
+    
+    const srcdoc = iframe.getAttribute('srcdoc');
+    if (!srcdoc) {
+        LOG_ERROR('solveFactorTree: no srcdoc found');
+        return null;
+    }
+    
+    // Parse originalTree from srcdoc
+    const treeMatch = srcdoc.match(/const\s+originalTree\s*=\s*(\{[\s\S]*?\});/);
+    if (!treeMatch) {
+        LOG_ERROR('solveFactorTree: could not find originalTree in srcdoc');
+        return null;
+    }
+    
+    let originalTree;
+    try {
+        originalTree = JSON.parse(treeMatch[1]);
+        LOG_DEBUG('solveFactorTree: parsed originalTree =', JSON.stringify(originalTree));
+    } catch (e) {
+        LOG_ERROR('solveFactorTree: failed to parse originalTree:', e.message);
+        return null;
+    }
+    
+    // Parse originalTokens from srcdoc
+    // Format: const originalTokens = [renderNumber(100),renderNumber(120),renderNumber(50)];
+    const tokensMatch = srcdoc.match(/const\s+originalTokens\s*=\s*\[([\s\S]*?)\];/);
+    if (!tokensMatch) {
+        LOG_ERROR('solveFactorTree: could not find originalTokens in srcdoc');
+        return null;
+    }
+    
+    // Extract numbers from renderNumber() calls
+    const tokenContent = tokensMatch[1];
+    const originalTokens = [];
+    const numberMatches = tokenContent.matchAll(/renderNumber\((\d+)\)/g);
+    for (const match of numberMatches) {
+        originalTokens.push(parseInt(match[1], 10));
+    }
+    
+    LOG_DEBUG('solveFactorTree: parsed originalTokens =', JSON.stringify(originalTokens));
+    
+    if (originalTokens.length === 0) {
+        LOG_ERROR('solveFactorTree: no tokens found');
+        return null;
+    }
+    
+    // Find all blank positions in tree (nodes where value is null)
+    // And calculate expected values based on multiplication of children
+    const blanks = []; // {treeIndex, expectedValue}
+    
+    function traverseTree(node, treeIndex) {
+        if (!node) return;
+        
+        // If this node is a blank (value is null), calculate expected value
+        if (node.value === null) {
+            // For a factor tree: parent = left * right
+            let expectedValue = null;
+            
+            // Get values of children
+            const leftValue = node.left?.value !== null ? parseFloat(node.left.value) : null;
+            const rightValue = node.right?.value !== null ? parseFloat(node.right.value) : null;
+            
+            if (leftValue !== null && rightValue !== null) {
+                expectedValue = leftValue * rightValue;
+                LOG_DEBUG('solveFactorTree: blank at index', treeIndex, 'expected value =', leftValue, '*', rightValue, '=', expectedValue);
+            } else {
+                LOG_DEBUG('solveFactorTree: blank at index', treeIndex, 'has incomplete children, leftValue=', leftValue, 'rightValue=', rightValue);
+            }
+            
+            blanks.push({
+                treeIndex: treeIndex,
+                expectedValue: expectedValue
+            });
+        }
+        
+        // Recursively traverse children
+        // Left child index = 2 * parentIndex (in 1-based: 2*i)
+        // Right child index = 2 * parentIndex + 1 (in 1-based: 2*i + 1)
+        if (node.left) {
+            traverseTree(node.left, treeIndex * 2);
+        }
+        if (node.right) {
+            traverseTree(node.right, treeIndex * 2 + 1);
+        }
+    }
+    
+    // Start traversal from root at index 1
+    traverseTree(originalTree, 1);
+    
+    LOG_DEBUG('solveFactorTree: found', blanks.length, 'blank(s):', JSON.stringify(blanks));
+    
+    // Match tokens to blanks
+    // tokenTreeIndices[i] = tree index where token i should go (1-based), or 0 if not used
+    const tokenTreeIndices = new Array(originalTokens.length).fill(0);
+    const usedBlanks = new Set();
+    
+    for (let i = 0; i < originalTokens.length; i++) {
+        const token = originalTokens[i];
+        
+        // Find a blank that matches this token's value
+        for (const blank of blanks) {
+            if (blank.expectedValue === token && !usedBlanks.has(blank.treeIndex)) {
+                tokenTreeIndices[i] = blank.treeIndex;
+                usedBlanks.add(blank.treeIndex);
+                LOG_DEBUG('solveFactorTree: token', token, '(index', i, ') -> tree position', blank.treeIndex);
+                break;
+            }
+        }
+    }
+    
+    LOG('solveFactorTree: solution tokenTreeIndices =', JSON.stringify(tokenTreeIndices));
+    
+    // Set the solution in the iframe
+    let success = false;
+    try {
+        const iframeWindow = iframe.contentWindow;
+        
+        if (iframeWindow) {
+            // Try getOutputVariables() first
+            if (typeof iframeWindow.getOutputVariables === 'function') {
+                const vars = iframeWindow.getOutputVariables();
+                if (vars && 'tokenTreeIndices' in vars) {
+                    vars.tokenTreeIndices = tokenTreeIndices;
+                    LOG('solveFactorTree: set vars.tokenTreeIndices');
+                    success = true;
+                }
+            }
+            
+            // Fallback to OUTPUT_VARS directly
+            if (!success && iframeWindow.OUTPUT_VARS) {
+                iframeWindow.OUTPUT_VARS.tokenTreeIndices = tokenTreeIndices;
+                LOG('solveFactorTree: set OUTPUT_VARS.tokenTreeIndices');
+                success = true;
+            }
+            
+            // Trigger callbacks
+            if (typeof iframeWindow.postOutputVariables === 'function') {
+                iframeWindow.postOutputVariables();
+                LOG_DEBUG('solveFactorTree: called postOutputVariables()');
+            }
+            
+            if (iframeWindow.duo && typeof iframeWindow.duo.onFirstInteraction === 'function') {
+                iframeWindow.duo.onFirstInteraction();
+                LOG_DEBUG('solveFactorTree: called duo.onFirstInteraction()');
+            }
+            
+            if (iframeWindow.duoDynamic && typeof iframeWindow.duoDynamic.onInteraction === 'function') {
+                iframeWindow.duoDynamic.onInteraction();
+                LOG_DEBUG('solveFactorTree: called duoDynamic.onInteraction()');
+            }
+        }
+    } catch (e) {
+        LOG_ERROR('solveFactorTree: error setting solution:', e.message);
+    }
+    
+    // Also try postMessage as fallback
+    try {
+        iframe.contentWindow.postMessage({
+            type: 'outputVariables',
+            payload: { tokenTreeIndices: tokenTreeIndices }
+        }, '*');
+        LOG_DEBUG('solveFactorTree: sent postMessage with outputVariables');
+    } catch (e) {
+        LOG_DEBUG('solveFactorTree: postMessage failed:', e.message);
+    }
+    
+    LOG('solveFactorTree: completed, success =', success);
+    
+    return {
+        type: 'factorTree',
+        originalTree: originalTree,
+        originalTokens: originalTokens,
+        blanks: blanks,
+        tokenTreeIndices: tokenTreeIndices,
         success: success
     };
 }
