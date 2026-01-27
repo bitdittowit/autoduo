@@ -7,6 +7,7 @@ import { BaseSolver } from './BaseSolver';
 import type { IChallengeContext, ISolverResult } from '../types';
 import { extractKatexValue } from '../parsers/KatexParser';
 import { extractPieChartFraction } from '../parsers/PieChartParser';
+import { extractBlockDiagramValue, isBlockDiagram } from '../parsers/BlockDiagramParser';
 import { evaluateMathExpression } from '../math/expressions';
 import { solveEquationWithBlank } from '../math/equations';
 import { roundToNearest } from '../math/rounding';
@@ -60,23 +61,36 @@ export class InteractiveSliderSolver extends BaseSolver {
         let equation: string | null = null;
         let sliderIframe: HTMLIFrameElement | null = null;
 
-        // Find pie chart + slider combination
+        // Find visual element (block diagram or pie chart) + slider combination
         if (allIframes.length >= 2) {
-            const pieChartIframe = findIframeByContent(allIframes, '<svg');
-            if (pieChartIframe) {
-                const pieSrcdoc = pieChartIframe.getAttribute('srcdoc');
-                if (pieSrcdoc) {
-                    const fraction = extractPieChartFraction(pieSrcdoc);
-                    if (fraction && fraction.value !== null) {
-                        targetValue = fraction.value;
-                        equation = `pie chart: ${fraction.numerator}/${fraction.denominator}`;
-                        this.log('found pie chart fraction:', equation);
+            const visualIframe = findIframeByContent(allIframes, '<svg');
+            if (visualIframe) {
+                const visualSrcdoc = visualIframe.getAttribute('srcdoc');
+                if (visualSrcdoc) {
+                    // Try block diagram first (more specific)
+                    if (isBlockDiagram(visualSrcdoc)) {
+                        const blockValue = extractBlockDiagramValue(visualSrcdoc);
+                        if (blockValue !== null) {
+                            targetValue = blockValue;
+                            equation = `block diagram: ${blockValue}`;
+                            this.log('found block diagram value:', blockValue);
+                        }
+                    }
+
+                    // Fall back to pie chart if not a block diagram
+                    if (targetValue === null) {
+                        const fraction = extractPieChartFraction(visualSrcdoc);
+                        if (fraction && fraction.value !== null) {
+                            targetValue = fraction.value;
+                            equation = `pie chart: ${fraction.numerator}/${fraction.denominator}`;
+                            this.log('found pie chart fraction:', equation);
+                        }
                     }
                 }
 
                 // Find the slider iframe
                 for (const ifrm of allIframes) {
-                    if (ifrm !== pieChartIframe) {
+                    if (ifrm !== visualIframe) {
                         const srcdoc = ifrm.getAttribute('srcdoc');
                         if (srcdoc?.includes('NumberLine')) {
                             sliderIframe = ifrm;
