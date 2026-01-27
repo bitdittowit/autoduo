@@ -3291,6 +3291,7 @@ function solveMathInteractiveSlider(challengeContainer, iframe) {
  * The page shows a fraction (e.g., 2/4) and you need to select that many segments on a spinner
  * e.g., if fraction is 2/4, select 2 segments out of 4 total
  * Also handles expressions like \frac{1}{5}+\frac{2}{5}=\duoblank{1} -> select 3 out of 5
+ * Also handles inequalities like \frac{5}{4}>\duoblank{1} -> select answer that satisfies inequality
  */
 function solveMathInteractiveSpinner(challengeContainer, iframe) {
     LOG('solveMathInteractiveSpinner: starting');
@@ -3310,119 +3311,263 @@ function solveMathInteractiveSpinner(challengeContainer, iframe) {
         LOG_DEBUG('solveMathInteractiveSpinner: spinner has', spinnerSegments, 'segments');
     }
     
-    // Method 1: Look for annotation with \frac
+    // NEW: Check for inequality with blank FIRST (e.g., \frac{5}{4}>\duoblank{1})
     const annotations = challengeContainer.querySelectorAll('annotation');
     for (const annotation of annotations) {
         const text = annotation.textContent;
-        LOG_DEBUG('solveMathInteractiveSpinner: checking annotation', text);
         
-        // Check if this is an equation with = (like \frac{1}{5}+\frac{2}{5}=\duoblank{1})
-        // If so, we need to evaluate the left side
-        if (text.includes('=') && text.includes('\\frac')) {
-            LOG_DEBUG('solveMathInteractiveSpinner: detected equation with fractions');
+        // Check if this is an inequality with a blank
+        const hasInequality = text.includes('>') || text.includes('<') || 
+                             text.includes('\\gt') || text.includes('\\lt') ||
+                             text.includes('\\ge') || text.includes('\\le') ||
+                             text.includes('\\geq') || text.includes('\\leq');
+        const hasBlank = text.includes('\\duoblank');
+        
+        if (hasInequality && hasBlank && spinnerSegments) {
+            LOG_DEBUG('solveMathInteractiveSpinner: detected INEQUALITY with blank:', text);
             
-            // IMPORTANT: Strip outer LaTeX wrappers from FULL text BEFORE splitting
-            // This prevents cutting off closing braces (e.g., \mathbf{\frac{1}{5}+\frac{1}{5}=...})
-            let cleanText = text;
-            while (cleanText.includes('\\mathbf{')) {
-                cleanText = extractLatexContent(cleanText, '\\mathbf');
+            // Clean LaTeX wrappers
+            let cleaned = text;
+            while (cleaned.includes('\\mathbf{')) {
+                cleaned = extractLatexContent(cleaned, '\\mathbf');
             }
-            while (cleanText.includes('\\textbf{')) {
-                cleanText = extractLatexContent(cleanText, '\\textbf');
+            while (cleaned.includes('\\textbf{')) {
+                cleaned = extractLatexContent(cleaned, '\\textbf');
             }
-            LOG_DEBUG('solveMathInteractiveSpinner: after wrapper cleanup:', cleanText);
             
-            // Extract left side of equation (before = or =\duoblank)
-            let leftSide = cleanText.split(/=(?:\\duoblank\{[^}]*\})?/)[0];
-            LOG_DEBUG('solveMathInteractiveSpinner: left side of equation:', leftSide);
+            // Detect the comparison operator and normalize
+            let operator = null;
+            let operatorStr = null;
             
-            // Convert all \frac{a}{b} to (a/b) for evaluation
-            while (leftSide.includes('\\frac{')) {
-                const fracMatch = leftSide.match(/\\frac\{/);
-                if (!fracMatch) break;
+            if (cleaned.includes('>=') || cleaned.includes('\\ge') || cleaned.includes('\\geq')) {
+                operator = '>=';
+                operatorStr = cleaned.includes('>=') ? '>=' : (cleaned.includes('\\geq') ? '\\geq' : '\\ge');
+            } else if (cleaned.includes('<=') || cleaned.includes('\\le') || cleaned.includes('\\leq')) {
+                operator = '<=';
+                operatorStr = cleaned.includes('<=') ? '<=' : (cleaned.includes('\\leq') ? '\\leq' : '\\le');
+            } else if (cleaned.includes('>') || cleaned.includes('\\gt')) {
+                operator = '>';
+                operatorStr = cleaned.includes('>') ? '>' : '\\gt';
+            } else if (cleaned.includes('<') || cleaned.includes('\\lt')) {
+                operator = '<';
+                operatorStr = cleaned.includes('<') ? '<' : '\\lt';
+            }
+            
+            if (operator) {
+                LOG_DEBUG('solveMathInteractiveSpinner: inequality operator =', operator);
                 
-                const fracStart = fracMatch.index;
-                // Find the numerator
-                let numStart = fracStart + 6; // after \frac{
-                let depth = 1;
-                let numEnd = numStart;
-                while (depth > 0 && numEnd < leftSide.length) {
-                    if (leftSide[numEnd] === '{') depth++;
-                    else if (leftSide[numEnd] === '}') depth--;
-                    numEnd++;
+                // Split by the operator
+                const parts = cleaned.split(operatorStr);
+                if (parts.length === 2) {
+                    let leftPart = parts[0].trim();
+                    let rightPart = parts[1].trim();
+                    
+                    // Determine which side has the blank
+                    const leftHasBlank = leftPart.includes('\\duoblank');
+                    const rightHasBlank = rightPart.includes('\\duoblank');
+                    
+                    // Get the known value from the non-blank side
+                    const knownPart = leftHasBlank ? rightPart : leftPart;
+                    
+                    // Parse the known fraction
+                    let knownValue = null;
+                    const fracMatch = knownPart.match(/\\frac\{(\d+)\}\{(\d+)\}/);
+                    if (fracMatch) {
+                        knownValue = parseInt(fracMatch[1], 10) / parseInt(fracMatch[2], 10);
+                    } else {
+                        // Try simple number
+                        const numMatch = knownPart.match(/(\d+)/);
+                        if (numMatch) {
+                            knownValue = parseFloat(numMatch[1]);
+                        }
+                    }
+                    
+                    if (knownValue !== null) {
+                        LOG_DEBUG('solveMathInteractiveSpinner: known value =', knownValue);
+                        
+                        // Calculate valid answer based on inequality direction and blank position
+                        // The answer must be representable on the spinner (0 to spinnerSegments)
+                        let targetNumerator = null;
+                        
+                        if (leftHasBlank) {
+                            // Blank is on LEFT: "? op value"
+                            // For "? > value": need something GREATER
+                            // For "? < value": need something LESS
+                            if (operator === '>' || operator === '>=') {
+                                // Find smallest valid numerator where num/spinnerSegments > knownValue
+                                for (let n = 0; n <= spinnerSegments; n++) {
+                                    const testValue = n / spinnerSegments;
+                                    if (operator === '>=' ? testValue >= knownValue : testValue > knownValue) {
+                                        targetNumerator = n;
+                                        break;
+                                    }
+                                }
+                            } else {
+                                // Find largest valid numerator where num/spinnerSegments < knownValue
+                                for (let n = spinnerSegments; n >= 0; n--) {
+                                    const testValue = n / spinnerSegments;
+                                    if (operator === '<=' ? testValue <= knownValue : testValue < knownValue) {
+                                        targetNumerator = n;
+                                        break;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Blank is on RIGHT: "value op ?"
+                            // For "value > ?": need something LESS
+                            // For "value < ?": need something GREATER
+                            if (operator === '>' || operator === '>=') {
+                                // Find largest valid numerator where num/spinnerSegments < knownValue
+                                for (let n = spinnerSegments; n >= 0; n--) {
+                                    const testValue = n / spinnerSegments;
+                                    if (operator === '>=' ? testValue <= knownValue : testValue < knownValue) {
+                                        targetNumerator = n;
+                                        break;
+                                    }
+                                }
+                            } else {
+                                // Find smallest valid numerator where num/spinnerSegments > knownValue
+                                for (let n = 0; n <= spinnerSegments; n++) {
+                                    const testValue = n / spinnerSegments;
+                                    if (operator === '<=' ? testValue >= knownValue : testValue > knownValue) {
+                                        targetNumerator = n;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (targetNumerator !== null) {
+                            numerator = targetNumerator;
+                            denominator = spinnerSegments;
+                            equation = text;
+                            LOG('solveMathInteractiveSpinner: inequality solved, select', numerator, 
+                                'segments (', numerator + '/' + denominator, '=' + (numerator/denominator) + 
+                                ', satisfies', knownValue, operator, '?)');
+                            break;
+                        } else {
+                            LOG_DEBUG('solveMathInteractiveSpinner: no valid numerator found for inequality');
+                        }
+                    }
                 }
-                const num = leftSide.substring(numStart, numEnd - 1);
+            }
+        }
+    }
+    
+    // Method 1: Look for annotation with \frac (only if inequality wasn't handled)
+    if (numerator === null) {
+        for (const annotation of annotations) {
+            const text = annotation.textContent;
+            LOG_DEBUG('solveMathInteractiveSpinner: checking annotation', text);
+            
+            // Check if this is an equation with = (like \frac{1}{5}+\frac{2}{5}=\duoblank{1})
+            // If so, we need to evaluate the left side
+            if (text.includes('=') && text.includes('\\frac')) {
+                LOG_DEBUG('solveMathInteractiveSpinner: detected equation with fractions');
                 
-                // Find the denominator
-                let denomStart = numEnd + 1; // after }{
-                depth = 1;
-                let denomEnd = denomStart;
-                while (depth > 0 && denomEnd < leftSide.length) {
-                    if (leftSide[denomEnd] === '{') depth++;
-                    else if (leftSide[denomEnd] === '}') depth--;
-                    denomEnd++;
+                // IMPORTANT: Strip outer LaTeX wrappers from FULL text BEFORE splitting
+                // This prevents cutting off closing braces (e.g., \mathbf{\frac{1}{5}+\frac{1}{5}=...})
+                let cleanText = text;
+                while (cleanText.includes('\\mathbf{')) {
+                    cleanText = extractLatexContent(cleanText, '\\mathbf');
                 }
-                const denom = leftSide.substring(denomStart, denomEnd - 1);
+                while (cleanText.includes('\\textbf{')) {
+                    cleanText = extractLatexContent(cleanText, '\\textbf');
+                }
+                LOG_DEBUG('solveMathInteractiveSpinner: after wrapper cleanup:', cleanText);
                 
-                leftSide = leftSide.substring(0, fracStart) + '(' + num + '/' + denom + ')' + leftSide.substring(denomEnd);
+                // Extract left side of equation (before = or =\duoblank)
+                let leftSide = cleanText.split(/=(?:\\duoblank\{[^}]*\})?/)[0];
+                LOG_DEBUG('solveMathInteractiveSpinner: left side of equation:', leftSide);
+                
+                // Convert all \frac{a}{b} to (a/b) for evaluation
+                while (leftSide.includes('\\frac{')) {
+                    const fracMatch = leftSide.match(/\\frac\{/);
+                    if (!fracMatch) break;
+                    
+                    const fracStart = fracMatch.index;
+                    // Find the numerator
+                    let numStart = fracStart + 6; // after \frac{
+                    let depth = 1;
+                    let numEnd = numStart;
+                    while (depth > 0 && numEnd < leftSide.length) {
+                        if (leftSide[numEnd] === '{') depth++;
+                        else if (leftSide[numEnd] === '}') depth--;
+                        numEnd++;
+                    }
+                    const num = leftSide.substring(numStart, numEnd - 1);
+                    
+                    // Find the denominator
+                    let denomStart = numEnd + 1; // after }{
+                    depth = 1;
+                    let denomEnd = denomStart;
+                    while (depth > 0 && denomEnd < leftSide.length) {
+                        if (leftSide[denomEnd] === '{') depth++;
+                        else if (leftSide[denomEnd] === '}') depth--;
+                        denomEnd++;
+                    }
+                    const denom = leftSide.substring(denomStart, denomEnd - 1);
+                    
+                    leftSide = leftSide.substring(0, fracStart) + '(' + num + '/' + denom + ')' + leftSide.substring(denomEnd);
+                }
+                
+                // Clean up for evaluation
+                leftSide = leftSide.replace(/\s+/g, '');
+                LOG_DEBUG('solveMathInteractiveSpinner: converted expression:', leftSide);
+                
+                // Evaluate the expression
+                const result = evaluateMathExpression(leftSide);
+                LOG_DEBUG('solveMathInteractiveSpinner: evaluated result:', result);
+                
+                if (result !== null && spinnerSegments) {
+                    // Calculate numerator from result and spinner segments
+                    // result = numerator / spinnerSegments
+                    // numerator = result * spinnerSegments
+                    const calculatedNumerator = Math.round(result * spinnerSegments);
+                    
+                    // Verify it's a valid fraction
+                    if (calculatedNumerator >= 0 && calculatedNumerator <= spinnerSegments) {
+                        numerator = calculatedNumerator;
+                        denominator = spinnerSegments;
+                        equation = text;
+                        LOG('solveMathInteractiveSpinner: evaluated expression to', numerator + '/' + denominator);
+                        break;
+                    }
+                }
             }
             
-            // Clean up for evaluation
-            leftSide = leftSide.replace(/\s+/g, '');
-            LOG_DEBUG('solveMathInteractiveSpinner: converted expression:', leftSide);
+            // Parse \frac{a}{b} pattern (possibly nested in \mathbf{}) - simple fraction case
+            // First, extract content from \mathbf{} if present
+            let cleanedText = text;
             
-            // Evaluate the expression
-            const result = evaluateMathExpression(leftSide);
-            LOG_DEBUG('solveMathInteractiveSpinner: evaluated result:', result);
+            // Handle \mathbf{} wrapper
+            while (cleanedText.includes('\\mathbf{')) {
+                cleanedText = extractLatexContent(cleanedText, '\\mathbf');
+            }
+            while (cleanedText.includes('\\textbf{')) {
+                cleanedText = extractLatexContent(cleanedText, '\\textbf');
+            }
             
-            if (result !== null && spinnerSegments) {
-                // Calculate numerator from result and spinner segments
-                // result = numerator / spinnerSegments
-                // numerator = result * spinnerSegments
-                const calculatedNumerator = Math.round(result * spinnerSegments);
-                
-                // Verify it's a valid fraction
-                if (calculatedNumerator >= 0 && calculatedNumerator <= spinnerSegments) {
-                    numerator = calculatedNumerator;
-                    denominator = spinnerSegments;
+            // Now look for single \frac{numerator}{denominator} (only if we haven't found result yet)
+            if (numerator === null) {
+                const fracMatch = cleanedText.match(/\\frac\{(\d+)\}\{(\d+)\}/);
+                if (fracMatch) {
+                    numerator = parseInt(fracMatch[1], 10);
+                    denominator = parseInt(fracMatch[2], 10);
                     equation = text;
-                    LOG('solveMathInteractiveSpinner: evaluated expression to', numerator + '/' + denominator);
+                    LOG('solveMathInteractiveSpinner: found simple fraction', numerator + '/' + denominator, 'from annotation');
                     break;
                 }
-            }
-        }
-        
-        // Parse \frac{a}{b} pattern (possibly nested in \mathbf{}) - simple fraction case
-        // First, extract content from \mathbf{} if present
-        let cleanedText = text;
-        
-        // Handle \mathbf{} wrapper
-        while (cleanedText.includes('\\mathbf{')) {
-            cleanedText = extractLatexContent(cleanedText, '\\mathbf');
-        }
-        while (cleanedText.includes('\\textbf{')) {
-            cleanedText = extractLatexContent(cleanedText, '\\textbf');
-        }
-        
-        // Now look for single \frac{numerator}{denominator} (only if we haven't found result yet)
-        if (numerator === null) {
-            const fracMatch = cleanedText.match(/\\frac\{(\d+)\}\{(\d+)\}/);
-            if (fracMatch) {
-                numerator = parseInt(fracMatch[1], 10);
-                denominator = parseInt(fracMatch[2], 10);
-                equation = text;
-                LOG('solveMathInteractiveSpinner: found simple fraction', numerator + '/' + denominator, 'from annotation');
-                break;
-            }
-            
-            // Also try simple fraction format like "2/4" (just in case)
-            const simpleFracMatch = cleanedText.match(/(\d+)\s*\/\s*(\d+)/);
-            if (simpleFracMatch) {
-                numerator = parseInt(simpleFracMatch[1], 10);
-                denominator = parseInt(simpleFracMatch[2], 10);
-                equation = text;
-                LOG('solveMathInteractiveSpinner: found simple fraction', numerator + '/' + denominator);
-                break;
+                
+                // Also try simple fraction format like "2/4" (just in case)
+                const simpleFracMatch = cleanedText.match(/(\d+)\s*\/\s*(\d+)/);
+                if (simpleFracMatch) {
+                    numerator = parseInt(simpleFracMatch[1], 10);
+                    denominator = parseInt(simpleFracMatch[2], 10);
+                    equation = text;
+                    LOG('solveMathInteractiveSpinner: found simple fraction', numerator + '/' + denominator);
+                    break;
+                }
             }
         }
     }

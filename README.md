@@ -14,7 +14,7 @@ Userscript для автоматического решения математи
 | **Select Operator** | Выбор оператора сравнения (`3/6 ? 1/6` → выбрать `>`) |
 | **Type Inequality Answer** | Ввод дроби для неравенства (`5/5 > ?` → ввести `4/5`) |
 | **Select Equivalent Fraction** | "Show this another way" — выбор эквивалентной дроби |
-| **Interactive Spinner** | Круговые диаграммы для выбора дробей |
+| **Interactive Spinner** | Круговые диаграммы для выбора дробей (включая неравенства: `5/4 > ?`) |
 | **Interactive Slider** | Числовые линии со слайдером (NumberLine) |
 | **Expression Build** | Построение математических выражений |
 | **Match Pairs** | Сопоставление пар |
