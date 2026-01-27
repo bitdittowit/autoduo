@@ -14,6 +14,8 @@ export * from './utils/logger';
 export * from './utils/helpers';
 export * from './math/fractions';
 export * from './math/rounding';
+export * from './math/expressions';
+export * from './parsers';
 
 /**
  * Инициализация скрипта
