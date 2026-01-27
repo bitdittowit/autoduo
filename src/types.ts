@@ -1,19 +1,68 @@
 /**
- * Результат работы солвера
+ * Базовый результат работы солвера
  */
 export interface ISolverResult {
     type: string;
-    answer: number | string | null;
-    [key: string]: unknown;
+    success: boolean;
+    answer?: number | string;
+    equation?: string;
+    selectedChoice?: number;
+    error?: string;
+}
+
+/**
+ * Результат солвера округления
+ */
+export interface IRoundingResult extends ISolverResult {
+    type: 'roundToNearest';
+    numberToRound: number;
+    roundingBase: number;
+    roundedValue: number;
+}
+
+/**
+ * Результат солвера уравнений
+ */
+export interface IEquationResult extends ISolverResult {
+    type: 'typeAnswer' | 'equationBlank';
+    equation: string;
+    answer: number | string;
+}
+
+/**
+ * Результат солвера дробей
+ */
+export interface IFractionResult extends ISolverResult {
+    type: 'simplifyFraction' | 'compareFractions' | 'selectFraction';
+    original?: ISimplifiedFraction;
+    simplified?: IFraction;
+}
+
+/**
+ * Контекст задания - все необходимые DOM элементы
+ */
+export interface IChallengeContext {
+    container: Element;
+    header?: Element | null;
+    headerText?: string;
+    equationContainer?: Element | null;
+    choices?: Element[];
+    textInput?: HTMLInputElement | null;
+    iframe?: HTMLIFrameElement | null;
 }
 
 /**
  * Интерфейс солвера
  */
 export interface ISolver {
+    /** Уникальное имя солвера */
     readonly name: string;
-    canSolve(container: HTMLElement): boolean;
-    solve(container: HTMLElement): ISolverResult | null;
+
+    /** Проверяет, может ли солвер решить данное задание */
+    canSolve(context: IChallengeContext): boolean;
+
+    /** Решает задание */
+    solve(context: IChallengeContext): ISolverResult | null;
 }
 
 /**

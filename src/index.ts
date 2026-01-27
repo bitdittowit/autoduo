@@ -16,6 +16,7 @@ export * from './math/fractions';
 export * from './math/rounding';
 export * from './math/expressions';
 export * from './parsers';
+export * from './solvers';
 
 /**
  * Инициализация скрипта

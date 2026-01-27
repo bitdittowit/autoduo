@@ -984,6 +984,524 @@ var AutoDuo = (function (exports) {
     }
 
     /**
+     * Базовый абстрактный класс для всех солверов
+     */
+    /**
+     * Абстрактный базовый класс солвера
+     *
+     * Все конкретные солверы должны наследоваться от этого класса
+     * и реализовывать методы canSolve и solve
+     */
+    class BaseSolver {
+        /**
+         * Логирует сообщение с именем солвера
+         */
+        log(...args) {
+            logger.info(`[${this.name}]`, ...args);
+        }
+        /**
+         * Логирует debug сообщение с именем солвера
+         */
+        logDebug(...args) {
+            logger.debug(`[${this.name}]`, ...args);
+        }
+        /**
+         * Логирует ошибку с именем солвера
+         */
+        logError(...args) {
+            logger.error(`[${this.name}]`, ...args);
+        }
+        /**
+         * Создаёт результат успеха
+         */
+        success(result) {
+            return { ...result, success: true };
+        }
+        /**
+         * Создаёт результат ошибки
+         */
+        failure(type, error) {
+            this.logError(error);
+            return {
+                type,
+                success: false,
+                error,
+            };
+        }
+        /**
+         * Симулирует клик по элементу
+         */
+        click(element) {
+            const event = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window,
+            });
+            element.dispatchEvent(event);
+        }
+        /**
+         * Симулирует ввод текста в input
+         */
+        typeInput(input, value) {
+            // Set value via native setter to trigger React's change detection
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+            if (nativeInputValueSetter) {
+                nativeInputValueSetter.call(input, value);
+            }
+            else {
+                input.value = value;
+            }
+            // Dispatch input event
+            const inputEvent = new Event('input', { bubbles: true });
+            input.dispatchEvent(inputEvent);
+        }
+        /**
+         * Извлекает текст из header (всегда в нижнем регистре)
+         */
+        getHeaderText(context) {
+            if (context.headerText)
+                return context.headerText.toLowerCase();
+            if (context.header?.textContent) {
+                return context.header.textContent.toLowerCase();
+            }
+            return '';
+        }
+        /**
+         * Проверяет, содержит ли header определённые слова
+         */
+        headerContains(context, ...words) {
+            const text = this.getHeaderText(context);
+            return words.every(word => text.includes(word.toLowerCase()));
+        }
+    }
+
+    /**
+     * Солвер для заданий "Round to the nearest X"
+     *
+     * Поддерживает два режима:
+     * 1. С выбором ответа (блок-диаграммы или KaTeX числа)
+     * 2. С вводом ответа (текстовое поле)
+     */
+    class RoundToNearestSolver extends BaseSolver {
+        name = 'RoundToNearestSolver';
+        /**
+         * Проверяет, является ли задание заданием на округление
+         */
+        canSolve(context) {
+            return this.headerContains(context, 'round', 'nearest');
+        }
+        /**
+         * Решает задание на округление
+         */
+        solve(context) {
+            this.log('starting');
+            // Extract rounding base from header
+            const headerText = this.getHeaderText(context);
+            const roundingBase = extractRoundingBase(headerText);
+            if (!roundingBase) {
+                return this.failure('roundToNearest', 'could not extract rounding base from header');
+            }
+            this.log('rounding base =', roundingBase);
+            // Extract number to round from equation container
+            const numberToRound = this.extractNumberToRound(context);
+            if (numberToRound === null) {
+                return this.failure('roundToNearest', 'could not extract number to round');
+            }
+            // Calculate rounded value
+            const roundedValue = roundToNearest(numberToRound, roundingBase);
+            this.log(numberToRound, 'rounds to', roundedValue);
+            // Solve based on input type
+            if (context.textInput) {
+                return this.solveWithTextInput(context.textInput, numberToRound, roundingBase, roundedValue);
+            }
+            if (context.choices && context.choices.length > 0) {
+                return this.solveWithChoices(context.choices, numberToRound, roundingBase, roundedValue);
+            }
+            return this.failure('roundToNearest', 'no text input or choices found');
+        }
+        /**
+         * Извлекает число для округления из контекста
+         */
+        extractNumberToRound(context) {
+            if (!context.equationContainer) {
+                this.logError('equationContainer is null');
+                return null;
+            }
+            const annotation = context.equationContainer.querySelector('annotation');
+            if (!annotation?.textContent) {
+                this.logError('annotation not found');
+                return null;
+            }
+            const cleaned = cleanAnnotationText(annotation.textContent);
+            const number = parseInt(cleaned, 10);
+            if (Number.isNaN(number)) {
+                this.logError('could not parse number from:', cleaned);
+                return null;
+            }
+            this.log('number to round =', number);
+            return number;
+        }
+        /**
+         * Решает задание с текстовым вводом
+         */
+        solveWithTextInput(textInput, numberToRound, roundingBase, roundedValue) {
+            this.typeInput(textInput, roundedValue.toString());
+            this.log('typed answer:', roundedValue);
+            return this.success({
+                type: 'roundToNearest',
+                numberToRound,
+                roundingBase,
+                roundedValue,
+                answer: roundedValue,
+            });
+        }
+        /**
+         * Решает задание с выбором ответа
+         */
+        solveWithChoices(choices, numberToRound, roundingBase, roundedValue) {
+            let matchedIndex = -1;
+            for (let i = 0; i < choices.length; i++) {
+                const choice = choices[i];
+                if (!choice)
+                    continue;
+                // Try block diagram first
+                const blockValue = this.getBlockDiagramValue(choice);
+                if (blockValue !== null) {
+                    this.logDebug('choice', i, 'has', blockValue, 'blocks');
+                    if (blockValue === roundedValue) {
+                        matchedIndex = i;
+                        this.log('found matching choice', i, 'with', blockValue, 'blocks');
+                        break;
+                    }
+                    continue;
+                }
+                // Try KaTeX number
+                const katexValue = this.getKatexValue(choice);
+                if (katexValue !== null) {
+                    this.logDebug('choice', i, 'KaTeX value =', katexValue);
+                    if (katexValue === roundedValue) {
+                        matchedIndex = i;
+                        this.log('found matching choice', i, 'with KaTeX value', katexValue);
+                        break;
+                    }
+                }
+            }
+            if (matchedIndex === -1) {
+                return this.failure('roundToNearest', `no matching choice found for rounded value ${roundedValue}`);
+            }
+            const matchedChoice = choices[matchedIndex];
+            if (matchedChoice) {
+                this.click(matchedChoice);
+                this.log('clicked choice', matchedIndex);
+            }
+            return this.success({
+                type: 'roundToNearest',
+                numberToRound,
+                roundingBase,
+                roundedValue,
+                selectedChoice: matchedIndex,
+            });
+        }
+        /**
+         * Извлекает значение из блок-диаграммы в choice
+         */
+        getBlockDiagramValue(choice) {
+            const iframe = choice.querySelector('iframe[title="Math Web Element"]');
+            if (!iframe)
+                return null;
+            const srcdoc = iframe.getAttribute('srcdoc');
+            if (!srcdoc)
+                return null;
+            return extractBlockDiagramValue(srcdoc);
+        }
+        /**
+         * Извлекает числовое значение из KaTeX в choice
+         */
+        getKatexValue(choice) {
+            const annotation = choice.querySelector('annotation');
+            if (!annotation?.textContent)
+                return null;
+            const cleaned = cleanAnnotationText(annotation.textContent);
+            const value = parseInt(cleaned, 10);
+            return Number.isNaN(value) ? null : value;
+        }
+    }
+
+    /**
+     * Солвер для заданий с вводом ответа (Type the answer)
+     *
+     * Поддерживает:
+     * - Уравнения с пропуском (X + 4 = 7)
+     * - Упрощение дробей (2/4 -> 1/2)
+     * - Неравенства с пропуском (5/5 > ?)
+     */
+    class TypeAnswerSolver extends BaseSolver {
+        name = 'TypeAnswerSolver';
+        /**
+         * Проверяет, является ли задание заданием с вводом ответа
+         * Это catch-all солвер для заданий с текстовым полем
+         */
+        canSolve(context) {
+            // Must have text input and equation container
+            return context.textInput != null && context.equationContainer != null;
+        }
+        /**
+         * Решает задание с вводом ответа
+         */
+        solve(context) {
+            if (!context.textInput || !context.equationContainer) {
+                return this.failure('typeAnswer', 'missing textInput or equationContainer');
+            }
+            this.log('starting');
+            // Extract equation from annotation
+            const annotation = context.equationContainer.querySelector('annotation');
+            if (!annotation?.textContent) {
+                return this.failure('typeAnswer', 'annotation not found');
+            }
+            const equation = annotation.textContent;
+            this.log('equation =', equation);
+            // Try different solving strategies
+            const result = this.trySolveSimplifyFraction(context.textInput, equation)
+                ?? this.trySolveInequality(context.textInput, equation)
+                ?? this.trySolveEquationWithBlank(context.textInput, equation);
+            return result;
+        }
+        /**
+         * Пробует решить как задание на упрощение дроби
+         */
+        trySolveSimplifyFraction(textInput, equation) {
+            // Check if it's a simplify fraction type (no =, no \duoblank)
+            if (equation.includes('=') || equation.includes('\\duoblank')) {
+                return null;
+            }
+            this.log('detected SIMPLIFY FRACTION type');
+            const fractionResult = parseFractionExpression(equation);
+            if (!fractionResult) {
+                this.logDebug('could not parse fraction from expression');
+                return null;
+            }
+            this.log('parsed fraction:', `${fractionResult.numerator}/${fractionResult.denominator}`);
+            // Simplify the fraction
+            const simplified = simplifyFraction(fractionResult.numerator, fractionResult.denominator);
+            this.log('simplified to:', `${simplified.numerator}/${simplified.denominator}`);
+            // Format and type the answer
+            const answer = `${simplified.numerator}/${simplified.denominator}`;
+            this.typeInput(textInput, answer);
+            this.log('typed answer:', answer);
+            return this.success({
+                type: 'simplifyFraction',
+                original: fractionResult,
+                simplified,
+                answer,
+            });
+        }
+        /**
+         * Пробует решить как неравенство с пропуском
+         */
+        trySolveInequality(textInput, equation) {
+            const hasInequality = equation.includes('>') || equation.includes('<') ||
+                equation.includes('\\gt') || equation.includes('\\lt') ||
+                equation.includes('\\ge') || equation.includes('\\le');
+            const hasBlank = equation.includes('\\duoblank');
+            if (!hasInequality || !hasBlank) {
+                return null;
+            }
+            this.log('detected INEQUALITY with blank type');
+            const answer = this.solveInequalityWithBlank(equation);
+            if (answer === null) {
+                this.logDebug('could not solve inequality');
+                return null;
+            }
+            this.typeInput(textInput, answer);
+            this.log('typed answer:', answer);
+            return this.success({
+                type: 'typeAnswer',
+                equation,
+                answer,
+            });
+        }
+        /**
+         * Пробует решить как уравнение с пропуском
+         */
+        trySolveEquationWithBlank(textInput, equation) {
+            this.log('solving as equation with blank');
+            const answer = this.solveEquationWithBlank(equation);
+            if (answer === null) {
+                return this.failure('typeAnswer', 'could not solve equation');
+            }
+            this.typeInput(textInput, answer.toString());
+            this.log('typed answer:', answer);
+            return this.success({
+                type: 'typeAnswer',
+                equation,
+                answer,
+            });
+        }
+        /**
+         * Решает уравнение с пропуском (e.g., "_ + 4 = 7")
+         */
+        solveEquationWithBlank(equation) {
+            // Clean and prepare the equation
+            let cleaned = equation
+                .replace(/\\duoblank\{[^}]*\}/g, 'X') // Replace \duoblank with X
+                .replace(/\s+/g, ''); // Remove whitespace
+            cleaned = cleanLatexWrappers(cleaned);
+            cleaned = cleanLatexForEval(cleaned);
+            this.logDebug('cleaned equation:', cleaned);
+            // Split by = to get left and right sides
+            const parts = cleaned.split('=');
+            if (parts.length !== 2) {
+                this.logDebug('equation does not have exactly one =');
+                return null;
+            }
+            const [left, right] = parts;
+            // Determine which side has X and solve
+            if (left?.includes('X') && right) {
+                return this.solveForX(left, right);
+            }
+            else if (right?.includes('X') && left) {
+                return this.solveForX(right, left);
+            }
+            this.logDebug('X not found in equation');
+            return null;
+        }
+        /**
+         * Решает выражение с X
+         */
+        solveForX(exprWithX, otherSide) {
+            const targetValue = evaluateMathExpression(otherSide);
+            if (targetValue === null) {
+                this.logDebug('could not evaluate other side');
+                return null;
+            }
+            // Try different values for X using binary search or simple iteration
+            // For simple cases like "X + 4" or "X - 3", we can solve algebraically
+            const simplePatterns = [
+                { pattern: /^X\+(\d+)$/, solve: (n) => targetValue - n },
+                { pattern: /^X-(\d+)$/, solve: (n) => targetValue + n },
+                { pattern: /^(\d+)\+X$/, solve: (n) => targetValue - n },
+                { pattern: /^(\d+)-X$/, solve: (n) => n - targetValue },
+                { pattern: /^X\*(\d+)$/, solve: (n) => targetValue / n },
+                { pattern: /^(\d+)\*X$/, solve: (n) => targetValue / n },
+                { pattern: /^X\/(\d+)$/, solve: (n) => targetValue * n },
+                { pattern: /^(\d+)\/X$/, solve: (n) => n / targetValue },
+                { pattern: /^X$/, solve: () => targetValue },
+            ];
+            for (const { pattern, solve } of simplePatterns) {
+                const match = exprWithX.match(pattern);
+                if (match) {
+                    const n = match[1] ? parseInt(match[1], 10) : 0;
+                    const result = solve(n);
+                    if (Number.isFinite(result) && Number.isInteger(result)) {
+                        return result;
+                    }
+                }
+            }
+            // Fallback: try brute force for small integers
+            for (let x = -100; x <= 100; x++) {
+                const testExpr = exprWithX.replace(/X/g, `(${x})`);
+                const testResult = evaluateMathExpression(testExpr);
+                if (testResult !== null && Math.abs(testResult - targetValue) < 0.0001) {
+                    return x;
+                }
+            }
+            this.logDebug('could not solve for X');
+            return null;
+        }
+        /**
+         * Решает неравенство с пропуском
+         */
+        solveInequalityWithBlank(equation) {
+            let cleaned = cleanLatexWrappers(equation);
+            // Detect operator
+            let operator = null;
+            if (cleaned.includes('>=') || cleaned.includes('\\ge')) {
+                operator = '>=';
+            }
+            else if (cleaned.includes('<=') || cleaned.includes('\\le')) {
+                operator = '<=';
+            }
+            else if (cleaned.includes('>') || cleaned.includes('\\gt')) {
+                operator = '>';
+            }
+            else if (cleaned.includes('<') || cleaned.includes('\\lt')) {
+                operator = '<';
+            }
+            if (!operator)
+                return null;
+            // Normalize the operator in the string
+            cleaned = cleaned
+                .replace(/\\ge/g, '>=')
+                .replace(/\\le/g, '<=')
+                .replace(/\\gt/g, '>')
+                .replace(/\\lt/g, '<');
+            // Split by operator
+            const operatorRegex = />=|<=|>|</;
+            const parts = cleaned.split(operatorRegex);
+            if (parts.length !== 2)
+                return null;
+            const [leftStr, rightStr] = parts;
+            // Find which side has the blank
+            const leftHasBlank = leftStr?.includes('\\duoblank');
+            const rightHasBlank = rightStr?.includes('\\duoblank');
+            if (!leftHasBlank && !rightHasBlank)
+                return null;
+            // Evaluate the known side
+            const knownSide = leftHasBlank ? rightStr : leftStr;
+            if (!knownSide)
+                return null;
+            const fractionResult = parseFractionExpression(knownSide);
+            if (!fractionResult)
+                return null;
+            const knownValue = fractionResult.value;
+            const knownDenom = fractionResult.denominator;
+            // Find a fraction that satisfies the inequality
+            // Use the same denominator for simplicity
+            let targetNum;
+            if (leftHasBlank) {
+                // ? [op] known
+                switch (operator) {
+                    case '>':
+                        targetNum = Math.floor(knownValue * knownDenom) + 1;
+                        break;
+                    case '>=':
+                        targetNum = Math.ceil(knownValue * knownDenom);
+                        break;
+                    case '<':
+                        targetNum = Math.ceil(knownValue * knownDenom) - 1;
+                        break;
+                    case '<=':
+                        targetNum = Math.floor(knownValue * knownDenom);
+                        break;
+                    default: return null;
+                }
+            }
+            else {
+                // known [op] ?
+                switch (operator) {
+                    case '>':
+                        targetNum = Math.ceil(knownValue * knownDenom) - 1;
+                        break;
+                    case '>=':
+                        targetNum = Math.floor(knownValue * knownDenom);
+                        break;
+                    case '<':
+                        targetNum = Math.floor(knownValue * knownDenom) + 1;
+                        break;
+                    case '<=':
+                        targetNum = Math.ceil(knownValue * knownDenom);
+                        break;
+                    default: return null;
+                }
+            }
+            // Return as fraction string
+            if (targetNum <= 0)
+                targetNum = 1; // Ensure positive
+            return `${targetNum}/${knownDenom}`;
+        }
+    }
+
+    /**
      * AutoDuo - Auto-solve Duolingo Math challenges
      *
      * Точка входа приложения
@@ -1006,13 +1524,16 @@ var AutoDuo = (function (exports) {
         }
     }
 
+    exports.BaseSolver = BaseSolver;
     exports.CONFIG = CONFIG;
     exports.LOG = LOG;
     exports.LOG_DEBUG = LOG_DEBUG;
     exports.LOG_ERROR = LOG_ERROR;
     exports.LOG_WARN = LOG_WARN;
     exports.PATTERNS = PATTERNS;
+    exports.RoundToNearestSolver = RoundToNearestSolver;
     exports.SELECTORS = SELECTORS;
+    exports.TypeAnswerSolver = TypeAnswerSolver;
     exports.addFractions = addFractions;
     exports.areFractionsEqual = areFractionsEqual;
     exports.ceilToNearest = ceilToNearest;
