@@ -2620,27 +2620,67 @@ function extractBlockDiagramValue(srcdoc) {
         }
     }
     
-    // Count all fill elements (rect and path) with the block colors
+    // Check for "hundred block" structures first
+    // These are used in "Round to nearest 100" challenges
+    // A structural path with clip-rule="evenodd" and fill color represents an additional 100 blocks
+    // It looks like a "booklet" or "folded grid" showing 100 more
+    // Attributes can be in any order, so we need to check for both
+    let additionalHundreds = 0;
+    const allPaths = svgContent.match(/<path[^>]*>/gi) || [];
+    for (const pathTag of allPaths) {
+        const hasClipRule = /clip-rule=["']evenodd["']/i.test(pathTag);
+        const hasFillColor = /fill=["']#(?:1CB0F6|49C0F8)["']/i.test(pathTag);
+        if (hasClipRule && hasFillColor) {
+            additionalHundreds += 100;
+        }
+    }
+    
+    if (additionalHundreds > 0) {
+        LOG_DEBUG('extractBlockDiagramValue: found', additionalHundreds / 100, 'hundred-block structures =', additionalHundreds);
+    }
+    
+    // Count all fill elements (rect and simple path) with the block colors
     // Each column of 10 blocks has: 2 <path> (top/bottom rounded) + 8 <rect> (middle) = 10 total
     // Dark mode color: #49C0F8, Light mode color: #1CB0F6
-    const fillPattern = /<(?:rect|path)[^>]*fill=["']#(?:1CB0F6|49C0F8)["'][^>]*>/gi;
-    const fillMatches = svgContent.match(fillPattern);
+    // Exclude complex structural paths (those with clip-rule)
+    let blockCount = 0;
     
-    if (fillMatches && fillMatches.length > 0) {
-        const blockCount = fillMatches.length;
-        LOG_DEBUG('extractBlockDiagramValue: found', blockCount, 'blocks in single SVG');
-        return blockCount;
+    // Count rects with fill color
+    const rectPattern = /<rect[^>]*fill=["']#(?:1CB0F6|49C0F8)["'][^>]*>/gi;
+    const rectMatches = svgContent.match(rectPattern);
+    if (rectMatches) {
+        blockCount += rectMatches.length;
+    }
+    
+    // Count simple paths (without clip-rule) with fill color
+    for (const pathTag of allPaths) {
+        const hasClipRule = /clip-rule=["']evenodd["']/i.test(pathTag);
+        const hasFillColor = /fill=["']#(?:1CB0F6|49C0F8)["']/i.test(pathTag);
+        if (!hasClipRule && hasFillColor) {
+            blockCount++;
+        }
+    }
+    
+    if (blockCount > 0) {
+        const totalCount = blockCount + additionalHundreds;
+        LOG_DEBUG('extractBlockDiagramValue: found', blockCount, 'regular blocks +', additionalHundreds, 'from structures =', totalCount);
+        return totalCount;
     }
     
     // Alternative: count rect elements with specific height and calculate
-    // Each column has 8 rects with height 14.1755
-    const rectMatches = svgContent.match(/<rect[^>]*height=["']14\.1755["'][^>]*>/gi);
-    if (rectMatches && rectMatches.length > 0) {
+    // Each column has 8 rects with height 14.1755 or 14.1323
+    const heightRectMatches = svgContent.match(/<rect[^>]*height=["']14\.1(?:755|323)["'][^>]*>/gi);
+    if (heightRectMatches && heightRectMatches.length > 0) {
         // 8 rects per column, each column represents 10
-        const columns = Math.round(rectMatches.length / 8);
-        const value = columns * 10;
-        LOG_DEBUG('extractBlockDiagramValue: found', rectMatches.length, 'rects =', columns, 'columns =', value);
+        const columns = Math.round(heightRectMatches.length / 8);
+        const value = columns * 10 + additionalHundreds;
+        LOG_DEBUG('extractBlockDiagramValue: found', heightRectMatches.length, 'rects =', columns, 'columns +', additionalHundreds, '=', value);
         return value;
+    }
+    
+    // If only additional hundreds found (no regular blocks)
+    if (additionalHundreds > 0) {
+        return additionalHundreds;
     }
     
     return null;
