@@ -812,9 +812,22 @@ function solveMathChallengeBlob() {
     const textInput = challengeContainer.querySelector(CHALLENGE_TEXT_INPUT);
     const tapTokens = challengeContainer.querySelectorAll('[data-test="-challenge-tap-token"]');
     
-    LOG_DEBUG('solveMathChallengeBlob: iframe =', !!mathWebIframe, ', patternTable =', !!patternTable, 
-              ', equationContainer =', !!equationContainer, ', choices =', choices.length, ', textInput =', !!textInput,
-              ', tapTokens =', tapTokens.length);
+    // NEW: Look for Spinner iframe which may NOT have title="Math Web Element"
+    // Spinner iframes have sandbox="allow-scripts allow-same-origin" and srcdoc containing "Spinner"
+    let spinnerIframe = null;
+    const allIframes = challengeContainer.querySelectorAll('iframe[sandbox][srcdoc]');
+    for (const iframe of allIframes) {
+        const srcdoc = iframe.getAttribute('srcdoc');
+        if (srcdoc && srcdoc.includes('Spinner')) {
+            spinnerIframe = iframe;
+            LOG_DEBUG('solveMathChallengeBlob: found separate Spinner iframe');
+            break;
+        }
+    }
+    
+    LOG_DEBUG('solveMathChallengeBlob: iframe =', !!mathWebIframe, ', spinnerIframe =', !!spinnerIframe, 
+              ', patternTable =', !!patternTable, ', equationContainer =', !!equationContainer, 
+              ', choices =', choices.length, ', textInput =', !!textInput, ', tapTokens =', tapTokens.length);
     
     // Check if this is "Match the pairs" with pie charts (iframes inside tap tokens)
     // This needs to be checked BEFORE the general iframe check
@@ -836,6 +849,13 @@ function solveMathChallengeBlob() {
             LOG('solveMathChallengeBlob: detected MATCH THE PAIRS type (pie charts in tap tokens)');
             return solveMathMatchPairs(challengeContainer, tapTokens);
         }
+    }
+    
+    // NEW: Check for Spinner iframe first (before other iframe checks)
+    // Spinner iframe may not have title="Math Web Element" attribute
+    if (spinnerIframe) {
+        LOG('solveMathChallengeBlob: detected INTERACTIVE SPINNER type (Spinner iframe found directly)');
+        return solveMathInteractiveSpinner(challengeContainer, spinnerIframe);
     }
     
     // NEW: Check if this is "Select the answer" with pie chart choices
@@ -2684,10 +2704,28 @@ function solveMathInteractiveSpinner(challengeContainer, iframe) {
     
     LOG('solveMathInteractiveSpinner: target = select', numerator, 'segments out of', denominator);
     
-    // Verify that spinner segments match the denominator (spinnerSegments was extracted earlier)
+    // IMPORTANT: If spinner segments don't match the fraction denominator,
+    // we need to recalculate the numerator based on the fractional value
+    // e.g., fraction 4/8 with spinner having 2 segments: 4/8 = 0.5, so select 0.5 * 2 = 1 segment
     if (spinnerSegments && spinnerSegments !== denominator) {
-        LOG_WARN('solveMathInteractiveSpinner: spinner segments (', spinnerSegments, 
-                 ') does not match fraction denominator (', denominator, ')');
+        LOG_DEBUG('solveMathInteractiveSpinner: spinner segments (', spinnerSegments, 
+                 ') does not match fraction denominator (', denominator, '), recalculating...');
+        
+        // Calculate the fraction value and convert to spinner segments
+        const fractionValue = numerator / denominator;
+        const adjustedNumerator = Math.round(fractionValue * spinnerSegments);
+        
+        LOG('solveMathInteractiveSpinner: adjusted from', numerator + '/' + denominator, 
+            '(', fractionValue, ') to', adjustedNumerator + '/' + spinnerSegments);
+        
+        numerator = adjustedNumerator;
+        denominator = spinnerSegments;
+    }
+    
+    // Final validation
+    if (numerator < 0 || numerator > spinnerSegments) {
+        LOG_ERROR('solveMathInteractiveSpinner: invalid numerator', numerator, 'for', spinnerSegments, 'segments');
+        return null;
     }
     
     // Select the correct number of segments
