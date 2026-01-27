@@ -1502,6 +1502,376 @@ var AutoDuo = (function (exports) {
     }
 
     /**
+     * Солвер для заданий "Select the equivalent fraction"
+     *
+     * Находит дробь с равным значением среди вариантов ответа.
+     * Например: 2/4 эквивалентна 1/2
+     */
+    class SelectEquivalentFractionSolver extends BaseSolver {
+        name = 'SelectEquivalentFractionSolver';
+        /**
+         * Проверяет, является ли задание на выбор эквивалентной дроби
+         */
+        canSolve(context) {
+            // Check header for "equivalent" or "equal"
+            const headerText = this.getHeaderText(context);
+            const isEquivalent = headerText.includes('equivalent') ||
+                headerText.includes('equal') ||
+                headerText.includes('same');
+            // Must have choices and equation container with fraction
+            const hasChoices = context.choices != null && context.choices.length > 0;
+            const hasEquation = context.equationContainer != null;
+            return isEquivalent && hasChoices && hasEquation;
+        }
+        /**
+         * Решает задание
+         */
+        solve(context) {
+            if (!context.equationContainer || !context.choices?.length) {
+                return this.failure('selectFraction', 'missing equationContainer or choices');
+            }
+            this.log('starting');
+            // Extract target fraction from equation
+            const annotation = context.equationContainer.querySelector('annotation');
+            if (!annotation?.textContent) {
+                return this.failure('selectFraction', 'annotation not found');
+            }
+            const targetFraction = parseFractionExpression(annotation.textContent);
+            if (!targetFraction) {
+                return this.failure('selectFraction', 'could not parse target fraction');
+            }
+            this.log('target =', `${targetFraction.numerator}/${targetFraction.denominator}`, '=', targetFraction.value);
+            // Find equivalent fraction among choices
+            let matchedIndex = -1;
+            for (let i = 0; i < context.choices.length; i++) {
+                const choice = context.choices[i];
+                if (!choice)
+                    continue;
+                const choiceAnnotation = choice.querySelector('annotation');
+                if (!choiceAnnotation?.textContent)
+                    continue;
+                const choiceFraction = parseFractionExpression(choiceAnnotation.textContent);
+                if (!choiceFraction)
+                    continue;
+                this.logDebug('choice', i, '=', `${choiceFraction.numerator}/${choiceFraction.denominator}`);
+                if (areFractionsEqual(targetFraction.numerator, targetFraction.denominator, choiceFraction.numerator, choiceFraction.denominator)) {
+                    matchedIndex = i;
+                    this.log('found equivalent at choice', i);
+                    break;
+                }
+            }
+            if (matchedIndex === -1) {
+                return this.failure('selectFraction', 'no equivalent fraction found');
+            }
+            const matchedChoice = context.choices[matchedIndex];
+            if (matchedChoice) {
+                this.click(matchedChoice);
+                this.log('clicked choice', matchedIndex);
+            }
+            return this.success({
+                type: 'selectFraction',
+                original: targetFraction,
+                selectedChoice: matchedIndex,
+            });
+        }
+    }
+
+    /**
+     * Солвер для заданий на сравнение с выбором ответа
+     *
+     * Например: "1/4 > ?" с вариантами "1/5" и "5/4"
+     * Нужно найти вариант, который делает сравнение истинным.
+     */
+    class ComparisonChoiceSolver extends BaseSolver {
+        name = 'ComparisonChoiceSolver';
+        /**
+         * Проверяет, является ли задание на сравнение
+         */
+        canSolve(context) {
+            if (!context.equationContainer || !context.choices?.length) {
+                return false;
+            }
+            // Check if equation contains comparison operator and blank
+            const annotation = context.equationContainer.querySelector('annotation');
+            if (!annotation?.textContent)
+                return false;
+            const text = annotation.textContent;
+            const hasComparison = text.includes('>') || text.includes('<') ||
+                text.includes('\\gt') || text.includes('\\lt') ||
+                text.includes('\\ge') || text.includes('\\le');
+            const hasBlank = text.includes('\\duoblank');
+            return hasComparison && hasBlank;
+        }
+        /**
+         * Решает задание
+         */
+        solve(context) {
+            if (!context.equationContainer || !context.choices?.length) {
+                return this.failure('comparison', 'missing equationContainer or choices');
+            }
+            this.log('starting');
+            const annotation = context.equationContainer.querySelector('annotation');
+            if (!annotation?.textContent) {
+                return this.failure('comparison', 'annotation not found');
+            }
+            const eqText = annotation.textContent;
+            this.log('equation =', eqText);
+            // Detect comparison operator
+            const operator = this.detectOperator(eqText);
+            if (!operator) {
+                return this.failure('comparison', 'no comparison operator found');
+            }
+            this.log('operator =', operator);
+            // Extract and evaluate left side value
+            const leftValue = this.extractLeftValue(eqText, operator);
+            if (leftValue === null) {
+                return this.failure('comparison', 'could not evaluate left side');
+            }
+            this.log('left value =', leftValue);
+            // Find choice that makes comparison true
+            let matchedIndex = -1;
+            for (let i = 0; i < context.choices.length; i++) {
+                const choice = context.choices[i];
+                if (!choice)
+                    continue;
+                const choiceAnnotation = choice.querySelector('annotation');
+                if (!choiceAnnotation?.textContent)
+                    continue;
+                const choiceFraction = parseFractionExpression(choiceAnnotation.textContent);
+                if (!choiceFraction)
+                    continue;
+                const choiceValue = choiceFraction.value;
+                this.logDebug('choice', i, '=', choiceValue);
+                if (this.compareValues(leftValue, operator, choiceValue)) {
+                    matchedIndex = i;
+                    this.log('found matching choice', i, ':', leftValue, operator, choiceValue);
+                    break;
+                }
+            }
+            if (matchedIndex === -1) {
+                return this.failure('comparison', 'no choice satisfies comparison');
+            }
+            const matchedChoice = context.choices[matchedIndex];
+            if (matchedChoice) {
+                this.click(matchedChoice);
+                this.log('clicked choice', matchedIndex);
+            }
+            return this.success({
+                type: 'comparison',
+                leftValue,
+                operator,
+                selectedChoice: matchedIndex,
+            });
+        }
+        /**
+         * Определяет оператор сравнения
+         */
+        detectOperator(text) {
+            if (text.includes('<=') || text.includes('\\le'))
+                return '<=';
+            if (text.includes('>=') || text.includes('\\ge'))
+                return '>=';
+            if (text.includes('<') || text.includes('\\lt'))
+                return '<';
+            if (text.includes('>') || text.includes('\\gt'))
+                return '>';
+            return null;
+        }
+        /**
+         * Извлекает значение левой части выражения
+         */
+        extractLeftValue(eqText, _operator) {
+            const cleaned = cleanLatexWrappers(eqText);
+            // Split by operator to get left side
+            const operators = ['<=', '>=', '\\le', '\\ge', '<', '>', '\\lt', '\\gt'];
+            let leftSide = cleaned;
+            for (const op of operators) {
+                if (leftSide.includes(op)) {
+                    const splitResult = leftSide.split(op)[0];
+                    if (splitResult !== undefined) {
+                        leftSide = splitResult;
+                    }
+                    break;
+                }
+            }
+            // Convert fractions to evaluable format
+            leftSide = convertLatexFractions(leftSide);
+            return evaluateMathExpression(leftSide);
+        }
+        /**
+         * Сравнивает два значения
+         */
+        compareValues(left, operator, right) {
+            switch (operator) {
+                case '<': return left < right;
+                case '>': return left > right;
+                case '<=': return left <= right;
+                case '>=': return left >= right;
+            }
+        }
+    }
+
+    /**
+     * Солвер для заданий на выбор оператора сравнения
+     *
+     * Например: "1/2 _ 1/4" с вариантами "<", ">", "="
+     * Нужно выбрать правильный оператор.
+     */
+    class SelectOperatorSolver extends BaseSolver {
+        name = 'SelectOperatorSolver';
+        /**
+         * Проверяет, является ли задание на выбор оператора
+         */
+        canSolve(context) {
+            if (!context.equationContainer || !context.choices?.length) {
+                return false;
+            }
+            // Check if equation contains blank between two values
+            const annotation = context.equationContainer.querySelector('annotation');
+            if (!annotation?.textContent)
+                return false;
+            const text = annotation.textContent;
+            const hasBlank = text.includes('\\duoblank');
+            // Check if choices contain operators
+            const hasOperatorChoices = context.choices.some(choice => {
+                const choiceText = choice?.textContent?.trim() ?? '';
+                return choiceText === '<' || choiceText === '>' || choiceText === '=' ||
+                    choiceText.includes('\\lt') || choiceText.includes('\\gt');
+            });
+            return hasBlank && hasOperatorChoices;
+        }
+        /**
+         * Решает задание
+         */
+        solve(context) {
+            if (!context.equationContainer || !context.choices?.length) {
+                return this.failure('selectOperator', 'missing equationContainer or choices');
+            }
+            this.log('starting');
+            const annotation = context.equationContainer.querySelector('annotation');
+            if (!annotation?.textContent) {
+                return this.failure('selectOperator', 'annotation not found');
+            }
+            const eqText = annotation.textContent;
+            this.log('equation =', eqText);
+            // Extract left and right values
+            const values = this.extractValues(eqText);
+            if (!values) {
+                return this.failure('selectOperator', 'could not extract values');
+            }
+            const { leftValue, rightValue } = values;
+            this.log('left =', leftValue, ', right =', rightValue);
+            // Determine correct operator
+            const correctOperator = this.determineOperator(leftValue, rightValue);
+            this.log('correct operator =', correctOperator);
+            // Find choice with correct operator
+            let matchedIndex = -1;
+            for (let i = 0; i < context.choices.length; i++) {
+                const choice = context.choices[i];
+                if (!choice)
+                    continue;
+                const choiceOperator = this.parseOperatorFromChoice(choice);
+                this.logDebug('choice', i, '=', choiceOperator);
+                if (choiceOperator === correctOperator) {
+                    matchedIndex = i;
+                    this.log('found matching choice', i);
+                    break;
+                }
+            }
+            if (matchedIndex === -1) {
+                return this.failure('selectOperator', 'no choice matches correct operator');
+            }
+            const matchedChoice = context.choices[matchedIndex];
+            if (matchedChoice) {
+                this.click(matchedChoice);
+                this.log('clicked choice', matchedIndex);
+            }
+            return this.success({
+                type: 'selectOperator',
+                leftValue,
+                rightValue,
+                operator: correctOperator,
+                selectedChoice: matchedIndex,
+            });
+        }
+        /**
+         * Извлекает левое и правое значения из уравнения
+         */
+        extractValues(eqText) {
+            let cleaned = cleanLatexWrappers(eqText);
+            // Replace blank with marker
+            cleaned = cleaned.replace(/\\duoblank\{[^}]*\}/g, ' BLANK ');
+            // Remove LaTeX spacing
+            cleaned = cleaned.replace(/\\[;,]/g, ' ');
+            cleaned = cleaned.replace(/\\quad/g, ' ');
+            cleaned = cleaned.replace(/\s+/g, ' ').trim();
+            // Split by BLANK
+            const parts = cleaned.split('BLANK');
+            if (parts.length !== 2 || !parts[0] || !parts[1]) {
+                this.logError('could not split by BLANK');
+                return null;
+            }
+            let leftPart = parts[0].trim();
+            let rightPart = parts[1].trim();
+            // Remove outer braces
+            leftPart = this.removeBraces(leftPart);
+            rightPart = this.removeBraces(rightPart);
+            // Convert fractions
+            leftPart = convertLatexFractions(leftPart);
+            rightPart = convertLatexFractions(rightPart);
+            // Remove remaining braces
+            leftPart = leftPart.replace(/[{}]/g, '').trim();
+            rightPart = rightPart.replace(/[{}]/g, '').trim();
+            // Evaluate
+            const leftValue = evaluateMathExpression(leftPart);
+            const rightValue = evaluateMathExpression(rightPart);
+            if (leftValue === null || rightValue === null) {
+                this.logError('could not evaluate values');
+                return null;
+            }
+            return { leftValue, rightValue };
+        }
+        /**
+         * Удаляет внешние скобки
+         */
+        removeBraces(str) {
+            let result = str.trim();
+            if (result.startsWith('{') && result.endsWith('}')) {
+                result = result.substring(1, result.length - 1);
+            }
+            return result;
+        }
+        /**
+         * Определяет правильный оператор
+         */
+        determineOperator(left, right) {
+            const epsilon = 0.0001;
+            if (Math.abs(left - right) < epsilon)
+                return '=';
+            if (left < right)
+                return '<';
+            return '>';
+        }
+        /**
+         * Извлекает оператор из варианта ответа
+         */
+        parseOperatorFromChoice(choice) {
+            const text = choice.textContent?.trim() ?? '';
+            // Check annotation first (for KaTeX)
+            const annotation = choice.querySelector('annotation');
+            const annotationText = annotation?.textContent?.trim() ?? '';
+            const checkText = annotationText || text;
+            if (checkText.includes('\\lt') || checkText === '<')
+                return '<';
+            if (checkText.includes('\\gt') || checkText === '>')
+                return '>';
+            if (checkText === '=' || checkText.includes('='))
+                return '=';
+            return null;
+        }
+    }
+
+    /**
      * AutoDuo - Auto-solve Duolingo Math challenges
      *
      * Точка входа приложения
@@ -1526,6 +1896,7 @@ var AutoDuo = (function (exports) {
 
     exports.BaseSolver = BaseSolver;
     exports.CONFIG = CONFIG;
+    exports.ComparisonChoiceSolver = ComparisonChoiceSolver;
     exports.LOG = LOG;
     exports.LOG_DEBUG = LOG_DEBUG;
     exports.LOG_ERROR = LOG_ERROR;
@@ -1533,6 +1904,8 @@ var AutoDuo = (function (exports) {
     exports.PATTERNS = PATTERNS;
     exports.RoundToNearestSolver = RoundToNearestSolver;
     exports.SELECTORS = SELECTORS;
+    exports.SelectEquivalentFractionSolver = SelectEquivalentFractionSolver;
+    exports.SelectOperatorSolver = SelectOperatorSolver;
     exports.TypeAnswerSolver = TypeAnswerSolver;
     exports.addFractions = addFractions;
     exports.areFractionsEqual = areFractionsEqual;
