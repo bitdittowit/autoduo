@@ -2481,12 +2481,48 @@ function extractPieChartFraction(svgContent) {
     return null;
 }
 
+/**
+ * Extract value from block diagram SVG (used in "Nearest 10" challenges)
+ * Counts the number of rectangles in the SVG - each represents one unit
+ * @param {string} srcdoc - The srcdoc of the iframe containing the SVG
+ * @returns {number|null} The count of blocks, or null if not a block diagram
+ */
+function extractBlockDiagramValue(srcdoc) {
+    // Block diagrams have multiple <rect> elements with fill colors
+    // Each rectangle represents one block
+    // Typically arranged in columns of 10
+    
+    // Count rectangles with fill attribute (the blocks)
+    // Match both light mode (#1CB0F6) and dark mode (#49C0F8) colors
+    const rectMatches = srcdoc.match(/<rect[^>]*fill=["']#(?:1CB0F6|49C0F8|1899D6)["'][^>]*>/gi);
+    
+    if (rectMatches && rectMatches.length > 0) {
+        // Filter out stroke-only rects (those are borders)
+        const fillRects = rectMatches.filter(rect => rect.includes('fill='));
+        if (fillRects.length > 0) {
+            LOG_DEBUG('extractBlockDiagramValue: found', fillRects.length, 'block rectangles');
+            return fillRects.length;
+        }
+    }
+    
+    // Alternative: count all rect elements with specific height (14.1755 is common)
+    const allRects = srcdoc.match(/<rect[^>]*height=["']14\.1755["'][^>]*>/gi);
+    if (allRects && allRects.length > 0) {
+        LOG_DEBUG('extractBlockDiagramValue: found', allRects.length, 'rectangles by height');
+        return allRects.length;
+    }
+    
+    return null;
+}
+
 function solveMathMatchPairs(challengeContainer, tapTokens) {
     LOG('solveMathMatchPairs: starting');
     LOG('solveMathMatchPairs: found', tapTokens.length, 'tap tokens');
     
     // Extract values from all tokens
     const tokens = [];
+    let hasNearest10 = false;  // Flag for "Nearest 10" matching mode
+    
     for (let i = 0; i < tapTokens.length; i++) {
         const token = tapTokens[i];
         
@@ -2497,11 +2533,41 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
             continue;
         }
         
-        // First, check if this token contains an iframe with pie chart
+        // Check for "Nearest 10" label (block diagram tokens)
+        const nearest10Label = token.querySelector('._27M4R');
+        if (nearest10Label && nearest10Label.textContent.includes('Nearest 10')) {
+            hasNearest10 = true;
+            
+            // This is a block diagram - extract value from iframe SVG
+            const iframe = token.querySelector('iframe[title="Math Web Element"]');
+            if (iframe) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc) {
+                    const blockCount = extractBlockDiagramValue(srcdoc);
+                    if (blockCount !== null) {
+                        tokens.push({
+                            index: i,
+                            element: token,
+                            rawValue: `${blockCount} blocks`,
+                            numericValue: blockCount,
+                            isBlockDiagram: true,
+                            isPieChart: false
+                        });
+                        LOG_DEBUG('solveMathMatchPairs: token', i, '- block diagram:', blockCount, 'blocks');
+                        continue;
+                    }
+                }
+            }
+        }
+        
+        // Check if this token contains an iframe with pie chart
         const iframe = token.querySelector('iframe[title="Math Web Element"]');
         if (iframe) {
             const srcdoc = iframe.getAttribute('srcdoc');
             if (srcdoc && srcdoc.includes('<svg')) {
+                // Skip if already processed as block diagram
+                if (nearest10Label) continue;
+                
                 const fraction = extractPieChartFraction(srcdoc);
                 if (fraction) {
                     tokens.push({
@@ -2554,20 +2620,48 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
         return null;
     }
     
-    // Check if this is a pie chart matching task (some tokens are pie charts)
+    // Check for different matching modes
+    const blockDiagrams = tokens.filter(t => t.isBlockDiagram);
     const pieCharts = tokens.filter(t => t.isPieChart);
-    const fractions = tokens.filter(t => !t.isPieChart);
+    const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram);
     
-    LOG('solveMathMatchPairs: pieCharts:', pieCharts.length, ', fractions/expressions:', fractions.length);
+    LOG('solveMathMatchPairs: blockDiagrams:', blockDiagrams.length, ', pieCharts:', pieCharts.length, 
+        ', numbers/expressions:', numbers.length);
     
     // Find matching pairs
     const pairs = [];
     const usedIndices = new Set();
     
-    if (pieCharts.length > 0 && fractions.length > 0) {
+    // MODE 1: "Nearest 10" matching - block diagrams with numbers
+    if (hasNearest10 && blockDiagrams.length > 0 && numbers.length > 0) {
+        LOG('solveMathMatchPairs: using Nearest 10 matching mode');
+        
+        for (const num of numbers) {
+            if (usedIndices.has(num.index)) continue;
+            
+            // Round to nearest 10
+            const rounded = Math.round(num.numericValue / 10) * 10;
+            LOG_DEBUG('solveMathMatchPairs: number', num.numericValue, 'rounds to', rounded);
+            
+            // Find matching block diagram
+            for (const block of blockDiagrams) {
+                if (usedIndices.has(block.index)) continue;
+                
+                if (block.numericValue === rounded) {
+                    pairs.push({ first: num, second: block });
+                    usedIndices.add(num.index);
+                    usedIndices.add(block.index);
+                    LOG('solveMathMatchPairs: found Nearest 10 pair:', num.rawValue, '→', rounded, '↔', block.rawValue);
+                    break;
+                }
+            }
+        }
+    }
+    // MODE 2: Pie chart matching with fractions
+    else if (pieCharts.length > 0 && numbers.length > 0) {
         // Match pie charts with fractions by comparing numeric values
         for (const pie of pieCharts) {
-            for (const frac of fractions) {
+            for (const frac of numbers) {
                 if (usedIndices.has(frac.index)) continue;
                 
                 // Compare values with tolerance for floating point
