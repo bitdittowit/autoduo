@@ -2483,33 +2483,51 @@ function extractPieChartFraction(svgContent) {
 
 /**
  * Extract value from block diagram SVG (used in "Nearest 10" challenges)
- * Counts the number of rectangles in the SVG - each represents one unit
+ * Block diagrams show columns of 10 blocks each, used for base-10 representation
+ * Each column = 10 blocks, so we count columns and multiply by 10
  * @param {string} srcdoc - The srcdoc of the iframe containing the SVG
- * @returns {number|null} The count of blocks, or null if not a block diagram
+ * @returns {number|null} The block value (10, 20, 30, 40, etc.), or null if not a block diagram
  */
 function extractBlockDiagramValue(srcdoc) {
-    // Block diagrams have multiple <rect> elements with fill colors
-    // Each rectangle represents one block
-    // Typically arranged in columns of 10
+    // The SVG contains both light-img and dark-img versions
+    // Extract only ONE version to avoid double counting
+    // Prefer dark-img since Duolingo Math often uses dark theme
+    let svgContent = srcdoc;
     
-    // Count rectangles with fill attribute (the blocks)
-    // Match both light mode (#1CB0F6) and dark mode (#49C0F8) colors
-    const rectMatches = srcdoc.match(/<rect[^>]*fill=["']#(?:1CB0F6|49C0F8|1899D6)["'][^>]*>/gi);
-    
-    if (rectMatches && rectMatches.length > 0) {
-        // Filter out stroke-only rects (those are borders)
-        const fillRects = rectMatches.filter(rect => rect.includes('fill='));
-        if (fillRects.length > 0) {
-            LOG_DEBUG('extractBlockDiagramValue: found', fillRects.length, 'block rectangles');
-            return fillRects.length;
+    const darkImgMatch = srcdoc.match(/<span class="dark-img">([\s\S]*?)<\/span>/);
+    if (darkImgMatch) {
+        svgContent = darkImgMatch[1];
+        LOG_DEBUG('extractBlockDiagramValue: using dark-img SVG');
+    } else {
+        // Fallback to light-img
+        const lightImgMatch = srcdoc.match(/<span class="light-img">([\s\S]*?)<\/span>/);
+        if (lightImgMatch) {
+            svgContent = lightImgMatch[1];
+            LOG_DEBUG('extractBlockDiagramValue: using light-img SVG');
         }
     }
     
-    // Alternative: count all rect elements with specific height (14.1755 is common)
-    const allRects = srcdoc.match(/<rect[^>]*height=["']14\.1755["'][^>]*>/gi);
-    if (allRects && allRects.length > 0) {
-        LOG_DEBUG('extractBlockDiagramValue: found', allRects.length, 'rectangles by height');
-        return allRects.length;
+    // Count all fill elements (rect and path) with the block colors
+    // Each column of 10 blocks has: 2 <path> (top/bottom rounded) + 8 <rect> (middle) = 10 total
+    // Dark mode color: #49C0F8, Light mode color: #1CB0F6
+    const fillPattern = /<(?:rect|path)[^>]*fill=["']#(?:1CB0F6|49C0F8)["'][^>]*>/gi;
+    const fillMatches = svgContent.match(fillPattern);
+    
+    if (fillMatches && fillMatches.length > 0) {
+        const blockCount = fillMatches.length;
+        LOG_DEBUG('extractBlockDiagramValue: found', blockCount, 'blocks in single SVG');
+        return blockCount;
+    }
+    
+    // Alternative: count rect elements with specific height and calculate
+    // Each column has 8 rects with height 14.1755
+    const rectMatches = svgContent.match(/<rect[^>]*height=["']14\.1755["'][^>]*>/gi);
+    if (rectMatches && rectMatches.length > 0) {
+        // 8 rects per column, each column represents 10
+        const columns = Math.round(rectMatches.length / 8);
+        const value = columns * 10;
+        LOG_DEBUG('extractBlockDiagramValue: found', rectMatches.length, 'rects =', columns, 'columns =', value);
+        return value;
     }
     
     return null;
