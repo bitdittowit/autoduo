@@ -1619,6 +1619,48 @@ function solveMathEquationBlank(challengeContainer, equationContainer) {
 function solveMathTypeAnswer(challengeContainer, equationContainer, textInput) {
     LOG('solveMathTypeAnswer: starting');
     
+    // NEW: Check for "Round to the nearest X" challenges first
+    const header = challengeContainer.querySelector('[data-test="challenge-header"]');
+    const headerText = header ? header.textContent.toLowerCase() : '';
+    
+    if (headerText.includes('round') && headerText.includes('nearest')) {
+        LOG('solveMathTypeAnswer: detected ROUND TO NEAREST type');
+        
+        // Extract rounding base (10, 100, 1000, etc.)
+        const baseMatch = headerText.match(/nearest\s*(\d+)/);
+        if (baseMatch) {
+            const roundingBase = parseInt(baseMatch[1]);
+            LOG('solveMathTypeAnswer: rounding base =', roundingBase);
+            
+            // Extract the number from KaTeX annotation
+            const annotation = equationContainer.querySelector('annotation');
+            if (annotation) {
+                let numberText = annotation.textContent.trim();
+                // Clean up LaTeX wrappers
+                numberText = numberText.replace(/\\mathbf\{([^}]+)\}/g, '$1');
+                numberText = numberText.replace(/\\textbf\{([^}]+)\}/g, '$1');
+                numberText = numberText.replace(/\\htmlClass\{[^}]*\}\{([^}]+)\}/g, '$1');
+                numberText = numberText.trim();
+                
+                const numberToRound = parseInt(numberText);
+                if (!isNaN(numberToRound)) {
+                    const roundedValue = Math.round(numberToRound / roundingBase) * roundingBase;
+                    LOG('solveMathTypeAnswer:', numberToRound, 'rounds to', roundedValue);
+                    
+                    // Type the answer
+                    dynamicInput(textInput, roundedValue.toString());
+                    
+                    return {
+                        type: 'roundToNearest',
+                        numberToRound: numberToRound,
+                        roundingBase: roundingBase,
+                        answer: roundedValue
+                    };
+                }
+            }
+        }
+    }
+    
     // Extract the equation from KaTeX
     const annotation = equationContainer.querySelector('annotation');
     if (!annotation) {
