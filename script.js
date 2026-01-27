@@ -3344,6 +3344,44 @@ function solveMathInteractiveSlider(challengeContainer, iframe) {
     
     // If pie chart method didn't work, fall back to equation-based methods
     if (targetValue === null) {
+        // Method 0 (NEW): Check for "Round to the nearest X" challenges
+        // These have a header with rounding instruction and a number to round
+        const header = challengeContainer.querySelector('[data-test="challenge-header"]');
+        const headerText = header ? header.textContent.toLowerCase() : '';
+        
+        if (headerText.includes('round') && headerText.includes('nearest')) {
+            LOG_DEBUG('solveMathInteractiveSlider: detected rounding challenge, header:', headerText);
+            
+            // Extract rounding base (10, 100, 1000, etc.)
+            const baseMatch = headerText.match(/nearest\s*(\d+)/);
+            if (baseMatch) {
+                const roundingBase = parseInt(baseMatch[1]);
+                LOG('solveMathInteractiveSlider: rounding base =', roundingBase);
+                
+                // Find the number to round from KaTeX annotations
+                const annotations = challengeContainer.querySelectorAll('annotation');
+                for (const annotation of annotations) {
+                    let text = annotation.textContent.trim();
+                    // Clean up LaTeX wrappers
+                    text = text.replace(/\\mathbf\{([^}]+)\}/g, '$1');
+                    text = text.replace(/\\textbf\{([^}]+)\}/g, '$1');
+                    text = text.replace(/\\htmlClass\{[^}]*\}\{([^}]+)\}/g, '$1');
+                    text = text.trim();
+                    
+                    const numberToRound = parseInt(text);
+                    if (!isNaN(numberToRound) && numberToRound > 0) {
+                        // Calculate the rounded value
+                        targetValue = Math.round(numberToRound / roundingBase) * roundingBase;
+                        equation = `round(${numberToRound}) to nearest ${roundingBase}`;
+                        LOG('solveMathInteractiveSlider: found number', numberToRound, '-> rounds to', targetValue);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    if (targetValue === null) {
         // Method 1: Look for equation with duoblank in annotation (outside iframe)
         const annotations = challengeContainer.querySelectorAll('annotation');
         
