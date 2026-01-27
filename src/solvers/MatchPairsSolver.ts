@@ -37,9 +37,9 @@ export class MatchPairsSolver extends BaseSolver {
         const hasHeader = this.headerContains(context, 'match', 'pair');
         const hasTapTokens = (context.choices?.length ?? 0) >= 4;
 
-        // Check for tap token elements specifically
+        // Check for tap token elements specifically (both variants)
         const tapTokens = context.container.querySelectorAll(
-            '[data-test="challenge-tap-token"]',
+            '[data-test="challenge-tap-token"], [data-test="-challenge-tap-token"]',
         );
 
         return (hasHeader || tapTokens.length >= 4) && hasTapTokens;
@@ -49,7 +49,7 @@ export class MatchPairsSolver extends BaseSolver {
         this.log('starting');
 
         const tapTokens = context.container.querySelectorAll(
-            '[data-test="challenge-tap-token"]',
+            '[data-test="challenge-tap-token"], [data-test="-challenge-tap-token"]',
         );
 
         if (tapTokens.length < 2) {

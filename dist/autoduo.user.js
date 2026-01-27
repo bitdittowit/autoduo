@@ -344,7 +344,7 @@ var AutoDuo = (function (exports) {
         PATTERN_TABLE: '[data-test="challenge-patternTable"]',
         // Choices
         CHALLENGE_CHOICE: '[data-test="challenge-choice"]',
-        CHALLENGE_TAP_TOKEN: '[data-test="challenge-tap-token"]',
+        CHALLENGE_TAP_TOKEN: '[data-test="challenge-tap-token"], [data-test="-challenge-tap-token"]',
         // Input elements
         TEXT_INPUT: '[data-test="challenge-text-input"]',
         EQUATION_CONTAINER: '._1KXkZ',
@@ -2472,13 +2472,13 @@ var AutoDuo = (function (exports) {
             // Match pairs have tap tokens and usually "Match" in header
             const hasHeader = this.headerContains(context, 'match', 'pair');
             const hasTapTokens = (context.choices?.length ?? 0) >= 4;
-            // Check for tap token elements specifically
-            const tapTokens = context.container.querySelectorAll('[data-test="challenge-tap-token"]');
+            // Check for tap token elements specifically (both variants)
+            const tapTokens = context.container.querySelectorAll('[data-test="challenge-tap-token"], [data-test="-challenge-tap-token"]');
             return (hasHeader || tapTokens.length >= 4) && hasTapTokens;
         }
         solve(context) {
             this.log('starting');
-            const tapTokens = context.container.querySelectorAll('[data-test="challenge-tap-token"]');
+            const tapTokens = context.container.querySelectorAll('[data-test="challenge-tap-token"], [data-test="-challenge-tap-token"]');
             if (tapTokens.length < 2) {
                 return this.failure('matchPairs', 'Not enough tap tokens');
             }

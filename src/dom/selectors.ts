@@ -11,7 +11,7 @@ export const SELECTORS = {
 
     // Choices
     CHALLENGE_CHOICE: '[data-test="challenge-choice"]',
-    CHALLENGE_TAP_TOKEN: '[data-test="challenge-tap-token"]',
+    CHALLENGE_TAP_TOKEN: '[data-test="challenge-tap-token"], [data-test="-challenge-tap-token"]',
 
     // Input elements
     TEXT_INPUT: '[data-test="challenge-text-input"]',
