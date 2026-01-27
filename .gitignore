@@ -1,11 +1,11 @@
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Dependencies
+node_modules/
+
+# Build output (но dist/ отслеживаем для userscript)
+# dist/
+
+# Coverage
+coverage/
 
 # IDE
 .idea/
@@ -14,21 +14,17 @@ Thumbs.db
 *.swo
 *~
 
+# OS
+.DS_Store
+Thumbs.db
+
 # Logs
 *.log
-logs/
+npm-debug.log*
+
+# TypeScript cache
+*.tsbuildinfo
 
 # Temporary files
-*.tmp
-*.temp
-
-# Build artifacts (if any)
-dist/
-build/
-
-# Node modules (if dependencies added later)
-node_modules/
-
-# Environment files
-.env
-.env.local
+tmp/
+temp/

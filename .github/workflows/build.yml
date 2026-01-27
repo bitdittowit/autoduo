@@ -1,0 +1,34 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'tsconfig.json'
+      - 'rollup.config.ts'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit dist/
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore: build autoduo.user.js [skip ci]'
+          file_pattern: 'dist/*'
+          commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
