@@ -879,6 +879,22 @@ function solveMathChallengeBlob() {
         return solveMathInteractiveSpinner(challengeContainer, spinnerIframe);
     }
     
+    // NEW: Check for "Round to the nearest X" challenges
+    // These have a header with "Round to the nearest 10/100/1000" and block diagram choices
+    if (equationContainer && choices.length > 0) {
+        const header = challengeContainer.querySelector('[data-test="challenge-header"]');
+        const headerText = header ? header.textContent.toLowerCase() : '';
+        
+        if (headerText.includes('round') && headerText.includes('nearest')) {
+            // Extract rounding base (10, 100, 1000, etc.)
+            const baseMatch = headerText.match(/nearest\s*(\d+)/);
+            if (baseMatch) {
+                LOG('solveMathChallengeBlob: detected ROUND TO NEAREST type (base:', baseMatch[1], ')');
+                return solveMathRoundToNearest(challengeContainer, equationContainer, choices, parseInt(baseMatch[1]));
+            }
+        }
+    }
+    
     // NEW: Check if this is "Select the answer" with pie chart choices
     // This is when we have an equation + multiple choice radio buttons where each choice contains a pie chart iframe
     if (equationContainer && choices.length > 0) {
@@ -2114,6 +2130,103 @@ function solveMathPieChartSelectFraction(challengeContainer, iframe, choices) {
         type: 'pieChartSelectFraction',
         pieChartFraction: pieChartFraction,
         selectedChoice: matchedChoiceIndex
+    };
+}
+
+/**
+ * Solve "Round to the nearest X" challenges
+ * The page shows a number (e.g., 99) and asks to round it to nearest 10/100/1000
+ * Choices are block diagrams representing different values
+ * @param {Element} challengeContainer - The challenge container
+ * @param {Element} equationContainer - The container with the number to round
+ * @param {NodeList|Array} choices - The choice elements with block diagrams
+ * @param {number} roundingBase - The rounding base (10, 100, 1000, etc.)
+ */
+function solveMathRoundToNearest(challengeContainer, equationContainer, choices, roundingBase) {
+    LOG('solveMathRoundToNearest: starting, base =', roundingBase);
+    
+    // Extract the number from KaTeX
+    const annotation = equationContainer.querySelector('annotation');
+    if (!annotation) {
+        LOG_ERROR('solveMathRoundToNearest: annotation not found');
+        return null;
+    }
+    
+    let numberText = annotation.textContent.trim();
+    LOG('solveMathRoundToNearest: number text =', numberText);
+    
+    // Clean up LaTeX wrappers
+    numberText = numberText.replace(/\\mathbf\{([^}]+)\}/g, '$1');
+    numberText = numberText.replace(/\\textbf\{([^}]+)\}/g, '$1');
+    numberText = numberText.trim();
+    
+    const numberToRound = parseInt(numberText);
+    if (isNaN(numberToRound)) {
+        LOG_ERROR('solveMathRoundToNearest: could not parse number from', numberText);
+        return null;
+    }
+    
+    // Calculate the rounded value
+    const roundedValue = Math.round(numberToRound / roundingBase) * roundingBase;
+    LOG('solveMathRoundToNearest:', numberToRound, 'rounds to', roundedValue);
+    
+    // Find the choice with matching block count
+    let matchedChoice = null;
+    let matchedIndex = -1;
+    
+    for (let i = 0; i < choices.length; i++) {
+        const choice = choices[i];
+        const iframe = choice.querySelector('iframe[title="Math Web Element"]');
+        
+        if (!iframe) {
+            LOG_DEBUG('solveMathRoundToNearest: choice', i, 'has no iframe');
+            continue;
+        }
+        
+        const srcdoc = iframe.getAttribute('srcdoc');
+        if (!srcdoc) {
+            LOG_DEBUG('solveMathRoundToNearest: choice', i, 'has no srcdoc');
+            continue;
+        }
+        
+        // Count blocks in this choice
+        const blockCount = extractBlockDiagramValue(srcdoc);
+        LOG_DEBUG('solveMathRoundToNearest: choice', i, 'has', blockCount, 'blocks');
+        
+        if (blockCount !== null && blockCount === roundedValue) {
+            matchedChoice = choice;
+            matchedIndex = i;
+            LOG('solveMathRoundToNearest: found matching choice', i, 'with', blockCount, 'blocks');
+            break;
+        }
+    }
+    
+    if (!matchedChoice) {
+        LOG_ERROR('solveMathRoundToNearest: no matching choice found for rounded value', roundedValue);
+        // Log all choices for debugging
+        for (let i = 0; i < choices.length; i++) {
+            const iframe = choices[i].querySelector('iframe[title="Math Web Element"]');
+            if (iframe) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc) {
+                    const blockCount = extractBlockDiagramValue(srcdoc);
+                    LOG_DEBUG('solveMathRoundToNearest: choice', i, '=', blockCount, 'blocks');
+                }
+            }
+        }
+        return null;
+    }
+    
+    // Click the matched choice
+    matchedChoice.dispatchEvent(clickEvent);
+    LOG('solveMathRoundToNearest: clicked choice', matchedIndex);
+    
+    return {
+        type: 'roundToNearest',
+        numberToRound: numberToRound,
+        roundingBase: roundingBase,
+        roundedValue: roundedValue,
+        selectedChoice: matchedIndex
     };
 }
 
