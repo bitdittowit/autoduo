@@ -128,6 +128,12 @@ src/
 
 ## Последние изменения
 
+### v1.0.2 (2026-01-25)
+- **Исправлено:** Ошибочный выбор `InteractiveSpinnerSolver` для заданий типа `NumberLine`
+  - Уточнена логика `InteractiveSpinnerSolver.canSolve()`: добавлена явная проверка исключения для компонентов `NumberLine` и `ExpressionBuild`
+  - Это предотвращает ложное срабатывание на задания с числовой линией, которые могут содержать строку 'segments:' в HTML
+  - Теперь задания с числовой линией (NumberLine) корректно обрабатываются `InteractiveSliderSolver`
+
 ### v1.0.1 (2026-01-25)
 - **Исправлено:** Ошибочный выбор `ExpressionBuildSolver` для заданий типа `NumberLine`
   - Уточнена логика `ExpressionBuildSolver.canSolve()`: теперь проверяется наличие уравнения с `\duoblank`

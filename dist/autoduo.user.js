@@ -3095,7 +3095,18 @@ var AutoDuo = (function (exports) {
             const allIframes = findAllIframes(context.container);
             for (const iframe of allIframes) {
                 const srcdoc = iframe.getAttribute('srcdoc');
-                if (srcdoc?.includes('segments:')) {
+                if (!srcdoc)
+                    continue;
+                // Exclude NumberLine components (they use InteractiveSliderSolver)
+                if (srcdoc.includes('NumberLine')) {
+                    continue;
+                }
+                // Exclude ExpressionBuild components
+                if (srcdoc.includes('exprBuild') || srcdoc.includes('ExpressionBuild')) {
+                    continue;
+                }
+                // Check for spinner-specific marker: segments:
+                if (srcdoc.includes('segments:')) {
                     return true;
                 }
             }
