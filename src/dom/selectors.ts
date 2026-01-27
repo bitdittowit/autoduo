@@ -4,7 +4,8 @@
 
 export const SELECTORS = {
     // Challenge containers
-    CHALLENGE_CONTAINER: '[data-test="challenge challenge-listenTap"]',
+    MATH_CHALLENGE_BLOB: '[data-test="challenge challenge-mathChallengeBlob"]',
+    CHALLENGE_CONTAINER: '[data-test^="challenge challenge-"]',
     CHALLENGE_HEADER: '[data-test="challenge-header"]',
 
     // Choices
@@ -13,7 +14,7 @@ export const SELECTORS = {
 
     // Input elements
     TEXT_INPUT: '[data-test="challenge-text-input"]',
-    EQUATION_CONTAINER: '[data-test="challenge-translate-prompt"]',
+    EQUATION_CONTAINER: '._1KXkZ',
 
     // Buttons
     PLAYER_NEXT: '[data-test="player-next"]',

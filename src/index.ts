@@ -8,7 +8,6 @@ import { CONFIG } from './config';
 import { logger } from './utils/logger';
 import { getLogPanel } from './ui/LogPanel';
 import { getControlPanel } from './ui/ControlPanel';
-import { getAutoRunner } from './core/AutoRunner';
 
 // Re-export для использования в других модулях
 export * from './types';
@@ -30,8 +29,6 @@ export * as dom from './dom';
  * Инициализация AutoDuo
  */
 function initAutoDuo(): void {
-    logger.info(`AutoDuo ${CONFIG.version} initializing...`);
-
     // Show UI panels
     const logPanel = getLogPanel();
     const controlPanel = getControlPanel();
@@ -42,16 +39,9 @@ function initAutoDuo(): void {
     // Connect logger to UI
     logger.setLogPanel(logPanel);
 
-    logger.info('AutoDuo initialized');
-    logger.info('Press Start to begin auto-solving');
-
-    // Auto-start if configured
-    if (CONFIG.autoSubmit) {
-        logger.info('Auto-start enabled');
-        setTimeout(() => {
-            getAutoRunner().start();
-        }, 1000);
-    }
+    logger.info(`AutoDuo ${CONFIG.version} ready`);
+    logger.info('Click "Solve 1" to solve current challenge');
+    logger.info('Click "Start" to auto-solve all challenges');
 }
 
 /**

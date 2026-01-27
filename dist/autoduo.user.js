@@ -31,7 +31,7 @@ var AutoDuo = (function (exports) {
         /**
          * Автоматически нажимать CHECK/CONTINUE
          */
-        autoSubmit: true,
+        autoSubmit: false,
         /**
          * Версия скрипта
          */
@@ -94,6 +94,7 @@ var AutoDuo = (function (exports) {
         content = null;
         maxLines = 100;
         isVisible = true;
+        logs = [];
         /**
          * Создаёт и показывает панель логов
          */
@@ -105,10 +106,10 @@ var AutoDuo = (function (exports) {
             this.container.innerHTML = `
             <div style="
                 position: fixed;
-                bottom: 10px;
-                right: 10px;
-                width: 400px;
-                max-height: 300px;
+                top: 10px;
+                left: 10px;
+                width: 450px;
+                max-height: 350px;
                 background: rgba(0, 0, 0, 0.9);
                 border: 1px solid #333;
                 border-radius: 8px;
@@ -129,17 +130,37 @@ var AutoDuo = (function (exports) {
                     <span style="font-weight: bold; color: #58cc02;">
                         AutoDuo ${CONFIG.version}
                     </span>
-                    <button id="autoduo-log-toggle" style="
-                        background: none;
-                        border: none;
-                        color: #888;
-                        cursor: pointer;
-                        font-size: 14px;
-                    ">−</button>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="autoduo-log-copy" style="
+                            background: #333;
+                            border: none;
+                            color: #888;
+                            cursor: pointer;
+                            font-size: 11px;
+                            padding: 2px 8px;
+                            border-radius: 4px;
+                        ">Copy</button>
+                        <button id="autoduo-log-clear" style="
+                            background: #333;
+                            border: none;
+                            color: #888;
+                            cursor: pointer;
+                            font-size: 11px;
+                            padding: 2px 8px;
+                            border-radius: 4px;
+                        ">Clear</button>
+                        <button id="autoduo-log-toggle" style="
+                            background: none;
+                            border: none;
+                            color: #888;
+                            cursor: pointer;
+                            font-size: 14px;
+                        ">−</button>
+                    </div>
                 </div>
                 <div id="autoduo-log-content" style="
                     padding: 8px;
-                    max-height: 250px;
+                    max-height: 290px;
                     overflow-y: auto;
                 "></div>
             </div>
@@ -147,8 +168,14 @@ var AutoDuo = (function (exports) {
             document.body.appendChild(this.container);
             this.content = document.getElementById('autoduo-log-content');
             // Toggle visibility
-            const toggle = document.getElementById('autoduo-log-toggle');
-            toggle?.addEventListener('click', () => this.toggle());
+            document.getElementById('autoduo-log-toggle')
+                ?.addEventListener('click', () => this.toggle());
+            // Copy logs
+            document.getElementById('autoduo-log-copy')
+                ?.addEventListener('click', () => this.copyToClipboard());
+            // Clear logs
+            document.getElementById('autoduo-log-clear')
+                ?.addEventListener('click', () => this.clear());
         }
         /**
          * Скрывает панель
@@ -174,9 +201,31 @@ var AutoDuo = (function (exports) {
             }
         }
         /**
+         * Копирует логи в буфер обмена
+         */
+        copyToClipboard() {
+            const text = this.logs.join('\n');
+            navigator.clipboard.writeText(text).then(() => {
+                const copyBtn = document.getElementById('autoduo-log-copy');
+                if (copyBtn) {
+                    copyBtn.textContent = 'Copied!';
+                    setTimeout(() => {
+                        copyBtn.textContent = 'Copy';
+                    }, 1500);
+                }
+            });
+        }
+        /**
          * Добавляет сообщение в лог
          */
         log(message, level = 'info') {
+            const time = new Date().toLocaleTimeString();
+            const fullMessage = `[${time}] ${message}`;
+            // Store for copy
+            this.logs.push(fullMessage);
+            if (this.logs.length > this.maxLines) {
+                this.logs.shift();
+            }
             if (!this.content)
                 return;
             const colors = {
@@ -189,10 +238,9 @@ var AutoDuo = (function (exports) {
             line.style.color = colors[level] ?? '#fff';
             line.style.marginBottom = '2px';
             line.style.wordBreak = 'break-word';
-            const time = new Date().toLocaleTimeString();
-            line.textContent = `[${time}] ${message}`;
+            line.textContent = fullMessage;
             this.content.appendChild(line);
-            // Limit lines
+            // Limit lines in DOM
             while (this.content.children.length > this.maxLines) {
                 this.content.firstChild?.remove();
             }
@@ -203,6 +251,7 @@ var AutoDuo = (function (exports) {
          * Очищает лог
          */
         clear() {
+            this.logs = [];
             if (this.content) {
                 this.content.innerHTML = '';
             }
@@ -289,14 +338,15 @@ var AutoDuo = (function (exports) {
      */
     const SELECTORS = {
         // Challenge containers
-        CHALLENGE_CONTAINER: '[data-test="challenge challenge-listenTap"]',
+        MATH_CHALLENGE_BLOB: '[data-test="challenge challenge-mathChallengeBlob"]',
+        CHALLENGE_CONTAINER: '[data-test^="challenge challenge-"]',
         CHALLENGE_HEADER: '[data-test="challenge-header"]',
         // Choices
         CHALLENGE_CHOICE: '[data-test="challenge-choice"]',
         CHALLENGE_TAP_TOKEN: '[data-test="challenge-tap-token"]',
         // Input elements
         TEXT_INPUT: '[data-test="challenge-text-input"]',
-        EQUATION_CONTAINER: '[data-test="challenge-translate-prompt"]',
+        EQUATION_CONTAINER: '._1KXkZ',
         // Buttons
         PLAYER_NEXT: '[data-test="player-next"]',
         PRACTICE_AGAIN: '[data-test="practice-again-button"]',
@@ -337,19 +387,23 @@ var AutoDuo = (function (exports) {
      * Определяет и создаёт контекст текущего задания
      */
     function detectChallenge() {
-        // Try to find challenge container
-        const containers = document.querySelectorAll('[data-test*="challenge"]');
-        for (const container of containers) {
-            const dataTest = container.getAttribute('data-test') ?? '';
-            if (dataTest.startsWith('challenge ')) {
-                return createChallengeContext(container);
-            }
+        // Priority 1: Math challenge blob (Duolingo Math)
+        const mathChallenge = document.querySelector(SELECTORS.MATH_CHALLENGE_BLOB);
+        if (mathChallenge) {
+            logger.debug('detectChallenge: found mathChallengeBlob');
+            return createChallengeContext(mathChallenge);
+        }
+        // Priority 2: Any challenge container
+        const container = document.querySelector(SELECTORS.CHALLENGE_CONTAINER);
+        if (container) {
+            logger.debug('detectChallenge: found challenge container');
+            return createChallengeContext(container);
         }
         // Fallback: look for specific elements
         const header = document.querySelector(SELECTORS.CHALLENGE_HEADER);
         if (header) {
-            const container = header.closest('[data-test]') ?? document.body;
-            return createChallengeContext(container);
+            const parent = header.closest('[data-test]') ?? document.body;
+            return createChallengeContext(parent);
         }
         logger.debug('detectChallenge: no challenge container found');
         return null;
@@ -4456,7 +4510,6 @@ var AutoDuo = (function (exports) {
      * Инициализация AutoDuo
      */
     function initAutoDuo() {
-        logger.info(`AutoDuo ${CONFIG.version} initializing...`);
         // Show UI panels
         const logPanel = getLogPanel();
         const controlPanel = getControlPanel();
@@ -4464,15 +4517,9 @@ var AutoDuo = (function (exports) {
         controlPanel.show();
         // Connect logger to UI
         logger.setLogPanel(logPanel);
-        logger.info('AutoDuo initialized');
-        logger.info('Press Start to begin auto-solving');
-        // Auto-start if configured
-        if (CONFIG.autoSubmit) {
-            logger.info('Auto-start enabled');
-            setTimeout(() => {
-                getAutoRunner().start();
-            }, 1000);
-        }
+        logger.info(`AutoDuo ${CONFIG.version} ready`);
+        logger.info('Click "Solve 1" to solve current challenge');
+        logger.info('Click "Start" to auto-solve all challenges');
     }
     /**
      * Запуск при загрузке страницы

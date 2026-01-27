@@ -10,21 +10,25 @@ import { logger } from '../utils/logger';
  * Определяет и создаёт контекст текущего задания
  */
 export function detectChallenge(): IChallengeContext | null {
-    // Try to find challenge container
-    const containers = document.querySelectorAll('[data-test*="challenge"]');
+    // Priority 1: Math challenge blob (Duolingo Math)
+    const mathChallenge = document.querySelector(SELECTORS.MATH_CHALLENGE_BLOB);
+    if (mathChallenge) {
+        logger.debug('detectChallenge: found mathChallengeBlob');
+        return createChallengeContext(mathChallenge);
+    }
 
-    for (const container of containers) {
-        const dataTest = container.getAttribute('data-test') ?? '';
-        if (dataTest.startsWith('challenge ')) {
-            return createChallengeContext(container);
-        }
+    // Priority 2: Any challenge container
+    const container = document.querySelector(SELECTORS.CHALLENGE_CONTAINER);
+    if (container) {
+        logger.debug('detectChallenge: found challenge container');
+        return createChallengeContext(container);
     }
 
     // Fallback: look for specific elements
     const header = document.querySelector(SELECTORS.CHALLENGE_HEADER);
     if (header) {
-        const container = header.closest('[data-test]') ?? document.body;
-        return createChallengeContext(container);
+        const parent = header.closest('[data-test]') ?? document.body;
+        return createChallengeContext(parent);
     }
 
     logger.debug('detectChallenge: no challenge container found');

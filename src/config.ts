@@ -20,7 +20,7 @@ export const CONFIG = {
     /**
      * Автоматически нажимать CHECK/CONTINUE
      */
-    autoSubmit: true,
+    autoSubmit: false,
 
     /**
      * Версия скрипта

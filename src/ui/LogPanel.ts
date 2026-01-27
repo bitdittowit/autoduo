@@ -9,6 +9,7 @@ export class LogPanel {
     private content: HTMLDivElement | null = null;
     private maxLines = 100;
     private isVisible = true;
+    private logs: string[] = [];
 
     /**
      * Создаёт и показывает панель логов
@@ -21,10 +22,10 @@ export class LogPanel {
         this.container.innerHTML = `
             <div style="
                 position: fixed;
-                bottom: 10px;
-                right: 10px;
-                width: 400px;
-                max-height: 300px;
+                top: 10px;
+                left: 10px;
+                width: 450px;
+                max-height: 350px;
                 background: rgba(0, 0, 0, 0.9);
                 border: 1px solid #333;
                 border-radius: 8px;
@@ -45,17 +46,37 @@ export class LogPanel {
                     <span style="font-weight: bold; color: #58cc02;">
                         AutoDuo ${CONFIG.version}
                     </span>
-                    <button id="autoduo-log-toggle" style="
-                        background: none;
-                        border: none;
-                        color: #888;
-                        cursor: pointer;
-                        font-size: 14px;
-                    ">−</button>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="autoduo-log-copy" style="
+                            background: #333;
+                            border: none;
+                            color: #888;
+                            cursor: pointer;
+                            font-size: 11px;
+                            padding: 2px 8px;
+                            border-radius: 4px;
+                        ">Copy</button>
+                        <button id="autoduo-log-clear" style="
+                            background: #333;
+                            border: none;
+                            color: #888;
+                            cursor: pointer;
+                            font-size: 11px;
+                            padding: 2px 8px;
+                            border-radius: 4px;
+                        ">Clear</button>
+                        <button id="autoduo-log-toggle" style="
+                            background: none;
+                            border: none;
+                            color: #888;
+                            cursor: pointer;
+                            font-size: 14px;
+                        ">−</button>
+                    </div>
                 </div>
                 <div id="autoduo-log-content" style="
                     padding: 8px;
-                    max-height: 250px;
+                    max-height: 290px;
                     overflow-y: auto;
                 "></div>
             </div>
@@ -65,8 +86,16 @@ export class LogPanel {
         this.content = document.getElementById('autoduo-log-content') as HTMLDivElement;
 
         // Toggle visibility
-        const toggle = document.getElementById('autoduo-log-toggle');
-        toggle?.addEventListener('click', () => this.toggle());
+        document.getElementById('autoduo-log-toggle')
+            ?.addEventListener('click', () => this.toggle());
+
+        // Copy logs
+        document.getElementById('autoduo-log-copy')
+            ?.addEventListener('click', () => this.copyToClipboard());
+
+        // Clear logs
+        document.getElementById('autoduo-log-clear')
+            ?.addEventListener('click', () => this.clear());
     }
 
     /**
@@ -96,9 +125,34 @@ export class LogPanel {
     }
 
     /**
+     * Копирует логи в буфер обмена
+     */
+    copyToClipboard(): void {
+        const text = this.logs.join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+            const copyBtn = document.getElementById('autoduo-log-copy');
+            if (copyBtn) {
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => {
+                    copyBtn.textContent = 'Copy';
+                }, 1500);
+            }
+        });
+    }
+
+    /**
      * Добавляет сообщение в лог
      */
     log(message: string, level: 'info' | 'warn' | 'error' | 'debug' = 'info'): void {
+        const time = new Date().toLocaleTimeString();
+        const fullMessage = `[${time}] ${message}`;
+
+        // Store for copy
+        this.logs.push(fullMessage);
+        if (this.logs.length > this.maxLines) {
+            this.logs.shift();
+        }
+
         if (!this.content) return;
 
         const colors: Record<string, string> = {
@@ -112,13 +166,11 @@ export class LogPanel {
         line.style.color = colors[level] ?? '#fff';
         line.style.marginBottom = '2px';
         line.style.wordBreak = 'break-word';
-
-        const time = new Date().toLocaleTimeString();
-        line.textContent = `[${time}] ${message}`;
+        line.textContent = fullMessage;
 
         this.content.appendChild(line);
 
-        // Limit lines
+        // Limit lines in DOM
         while (this.content.children.length > this.maxLines) {
             this.content.firstChild?.remove();
         }
@@ -131,6 +183,7 @@ export class LogPanel {
      * Очищает лог
      */
     clear(): void {
+        this.logs = [];
         if (this.content) {
             this.content.innerHTML = '';
         }
