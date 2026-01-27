@@ -2,20 +2,10 @@ import type { LogLevel } from '../types';
 import { CONFIG } from '../config';
 
 /**
- * Цвета для разных уровней логирования
- */
-const LOG_COLORS: Record<LogLevel, string> = {
-    debug: '#00aaff',
-    info: '#00ff00',
-    warn: '#ffff00',
-    error: '#ff4444',
-};
-
-/**
  * Интерфейс для панели логов
  */
 interface ILogPanel {
-    log: (message: string, color?: string) => void;
+    log: (message: string, level?: 'info' | 'warn' | 'error' | 'debug') => void;
 }
 
 let logPanel: ILogPanel | null = null;
@@ -28,18 +18,6 @@ export function setLogPanel(panel: ILogPanel): void {
 }
 
 /**
- * Форматирует текущее время для логов
- */
-function getTimestamp(): string {
-    const now = new Date();
-    return now.toLocaleTimeString('ru-RU', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-    });
-}
-
-/**
  * Выводит сообщение в лог
  */
 function log(level: LogLevel, message: string, ...args: unknown[]): void {
@@ -47,28 +25,26 @@ function log(level: LogLevel, message: string, ...args: unknown[]): void {
         return;
     }
 
-    const timestamp = getTimestamp();
     const formattedArgs = args.length > 0
         ? ' ' + args.map(arg =>
             typeof arg === 'object' ? JSON.stringify(arg) : String(arg),
         ).join(' ')
         : '';
 
-    const fullMessage = `[${timestamp}] ${message}${formattedArgs}`;
-    const color = LOG_COLORS[level];
+    const fullMessage = `${message}${formattedArgs}`;
 
     if (logPanel) {
-        logPanel.log(fullMessage, color);
+        logPanel.log(fullMessage, level);
     }
 
     // Дублируем в консоль для отладки
     // (на Duolingo console.log может быть заблокирован)
-    try {
-        const consoleMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
-        console[consoleMethod](`[AutoDuo] ${fullMessage}`);
-    } catch {
-        // Игнорируем ошибки консоли
-    }
+    // try {
+    //     const consoleMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
+    //     console[consoleMethod](`[AutoDuo] ${fullMessage}`);
+    // } catch {
+    //     // Игнорируем ошибки консоли
+    // }
 }
 
 /**
@@ -79,6 +55,7 @@ export const logger = {
     info: (message: string, ...args: unknown[]): void => log('info', message, ...args),
     warn: (message: string, ...args: unknown[]): void => log('warn', message, ...args),
     error: (message: string, ...args: unknown[]): void => log('error', message, ...args),
+    setLogPanel,
 };
 
 /**
