@@ -813,21 +813,35 @@ function solveMathChallengeBlob() {
     const tapTokens = challengeContainer.querySelectorAll('[data-test="-challenge-tap-token"]');
     
     // NEW: Look for Spinner iframe which may NOT have title="Math Web Element"
-    // Spinner iframes have sandbox="allow-scripts allow-same-origin" and srcdoc containing "Spinner"
+    // Spinner iframes have sandbox="allow-scripts allow-same-origin" and srcdoc containing "new Spinner("
+    // IMPORTANT: We must be specific - look for "new Spinner(" not just "Spinner" 
+    // because NumberLine minified code may also contain "Spinner" word
     let spinnerIframe = null;
+    let numberLineIframe = null;
     const allIframes = challengeContainer.querySelectorAll('iframe[sandbox][srcdoc]');
     for (const iframe of allIframes) {
         const srcdoc = iframe.getAttribute('srcdoc');
-        if (srcdoc && srcdoc.includes('Spinner')) {
+        if (!srcdoc) continue;
+        
+        // Check for NumberLine first - it's more specific
+        // NumberLine iframes contain "new NumberLine(" in the initialization
+        if (srcdoc.includes('new NumberLine(') || srcdoc.includes('NumberLine({')) {
+            numberLineIframe = iframe;
+            LOG_DEBUG('solveMathChallengeBlob: found NumberLine iframe');
+        }
+        
+        // Check for Spinner - must be a specific Spinner initialization
+        // Look for "new Spinner(" which is the constructor call
+        if (srcdoc.includes('new Spinner(') || srcdoc.includes('Spinner({')) {
             spinnerIframe = iframe;
             LOG_DEBUG('solveMathChallengeBlob: found separate Spinner iframe');
-            break;
         }
     }
     
-    LOG_DEBUG('solveMathChallengeBlob: iframe =', !!mathWebIframe, ', spinnerIframe =', !!spinnerIframe, 
-              ', patternTable =', !!patternTable, ', equationContainer =', !!equationContainer, 
-              ', choices =', choices.length, ', textInput =', !!textInput, ', tapTokens =', tapTokens.length);
+    LOG_DEBUG('solveMathChallengeBlob: iframe =', !!mathWebIframe, ', spinnerIframe =', !!spinnerIframe,
+              ', numberLineIframe =', !!numberLineIframe, ', patternTable =', !!patternTable, 
+              ', equationContainer =', !!equationContainer, ', choices =', choices.length, 
+              ', textInput =', !!textInput, ', tapTokens =', tapTokens.length);
     
     // Check if this is "Match the pairs" with pie charts (iframes inside tap tokens)
     // This needs to be checked BEFORE the general iframe check
@@ -851,7 +865,14 @@ function solveMathChallengeBlob() {
         }
     }
     
-    // NEW: Check for Spinner iframe first (before other iframe checks)
+    // NEW: Check for NumberLine iframe first (before Spinner and other iframe checks)
+    // NumberLine is for "Show this another way" challenges with slider
+    if (numberLineIframe) {
+        LOG('solveMathChallengeBlob: detected NUMBER LINE SLIDER type (NumberLine iframe found)');
+        return solveMathInteractiveSlider(challengeContainer, numberLineIframe);
+    }
+    
+    // NEW: Check for Spinner iframe (before other iframe checks)
     // Spinner iframe may not have title="Math Web Element" attribute
     if (spinnerIframe) {
         LOG('solveMathChallengeBlob: detected INTERACTIVE SPINNER type (Spinner iframe found directly)');
@@ -2215,8 +2236,14 @@ function solveMathInteractiveSlider(challengeContainer, iframe) {
     }
     
     // Check if there are multiple iframes - this might be the "pie chart + slider" variant
-    const allIframes = challengeContainer.querySelectorAll('iframe[title="Math Web Element"]');
-    LOG_DEBUG('solveMathInteractiveSlider: found', allIframes.length, 'iframes');
+    // Include both titled iframes and sandbox iframes (NumberLine doesn't always have title)
+    const titledIframes = challengeContainer.querySelectorAll('iframe[title="Math Web Element"]');
+    const sandboxIframes = challengeContainer.querySelectorAll('iframe[sandbox][srcdoc]');
+    
+    // Combine into a unique Set then convert back to array
+    const allIframesSet = new Set([...titledIframes, ...sandboxIframes]);
+    const allIframes = Array.from(allIframesSet);
+    LOG_DEBUG('solveMathInteractiveSlider: found', allIframes.length, 'iframes (titled:', titledIframes.length, ', sandbox:', sandboxIframes.length, ')');
     
     let targetValue = null;
     let equation = null;
