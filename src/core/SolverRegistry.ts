@@ -21,6 +21,7 @@ import { ExpressionBuildSolver } from '../solvers/ExpressionBuildSolver';
 import { FactorTreeSolver } from '../solvers/FactorTreeSolver';
 import { PatternTableSolver } from '../solvers/PatternTableSolver';
 import { PieChartSelectFractionSolver } from '../solvers/PieChartSelectFractionSolver';
+import { BlockDiagramChoiceSolver } from '../solvers/BlockDiagramChoiceSolver';
 
 /**
  * Регистр солверов - выбирает подходящий солвер для задания
@@ -85,6 +86,7 @@ export class SolverRegistry {
         this.register(new PatternTableSolver());
 
         // Specific challenge type solvers
+        this.register(new BlockDiagramChoiceSolver());
         this.register(new RoundToNearestSolver());
         this.register(new SelectEquivalentFractionSolver());
         this.register(new ComparisonChoiceSolver());

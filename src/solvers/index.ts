@@ -18,6 +18,7 @@ export { ExpressionBuildSolver } from './ExpressionBuildSolver';
 export { FactorTreeSolver } from './FactorTreeSolver';
 export { PatternTableSolver } from './PatternTableSolver';
 export { PieChartSelectFractionSolver } from './PieChartSelectFractionSolver';
+export { BlockDiagramChoiceSolver } from './BlockDiagramChoiceSolver';
 
 // Re-export types
 export type { ISolver, ISolverResult, IChallengeContext } from '../types';
