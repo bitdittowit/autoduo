@@ -52,6 +52,8 @@ export class MatchPairsSolver extends BaseSolver {
             '[data-test="challenge-tap-token"], [data-test="-challenge-tap-token"]',
         );
 
+        this.log('found tap tokens:', tapTokens.length);
+
         if (tapTokens.length < 2) {
             return this.failure('matchPairs', 'Not enough tap tokens');
         }
@@ -112,6 +114,7 @@ export class MatchPairsSolver extends BaseSolver {
 
             // Skip disabled tokens
             if (token.getAttribute('aria-disabled') === 'true') {
+                this.log('token', i, 'is disabled, skipping');
                 continue;
             }
 
@@ -119,6 +122,7 @@ export class MatchPairsSolver extends BaseSolver {
             const nearestLabel = token.querySelector('._27M4R');
             if (nearestLabel) {
                 const labelText = nearestLabel.textContent ?? '';
+                this.log('token', i, 'has Nearest label:', labelText);
                 const nearestMatch = labelText.match(/Nearest\s*(\d+)/i);
                 if (nearestMatch?.[1]) {
                     hasNearestRounding = true;
@@ -130,8 +134,11 @@ export class MatchPairsSolver extends BaseSolver {
                         roundingBase,
                     );
                     if (tokenData) {
+                        this.log('token', i, 'extracted rounding:', tokenData.rawValue);
                         tokens.push(tokenData);
                         continue;
+                    } else {
+                        this.log('token', i, 'failed to extract rounding value');
                     }
                 }
             }
@@ -145,6 +152,7 @@ export class MatchPairsSolver extends BaseSolver {
                 if (srcdoc?.includes('<svg')) {
                     const fraction = extractPieChartFraction(srcdoc);
                     if (fraction) {
+                        this.log('token', i, 'extracted pie chart:', fraction.value);
                         tokens.push({
                             index: i,
                             element: token,
@@ -163,6 +171,7 @@ export class MatchPairsSolver extends BaseSolver {
                 const evaluated = evaluateMathExpression(value);
                 const isCompound = this.isCompoundExpression(value);
 
+                this.log('token', i, 'extracted KaTeX:', value, '=', evaluated);
                 tokens.push({
                     index: i,
                     element: token,
@@ -171,6 +180,8 @@ export class MatchPairsSolver extends BaseSolver {
                     isExpression: isCompound,
                     isPieChart: false,
                 });
+            } else {
+                this.log('token', i, 'failed to extract any value');
             }
         }
 

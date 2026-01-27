@@ -60,9 +60,15 @@ export function clickContinueButton(): boolean {
 
     for (const selector of selectors) {
         const button = document.querySelector<HTMLButtonElement>(selector);
-        if (button && !button.disabled) {
-            click(button);
-            return true;
+        if (button) {
+            // Check both disabled property and aria-disabled attribute
+            const isDisabled = button.disabled ||
+                button.getAttribute('aria-disabled') === 'true';
+
+            if (!isDisabled) {
+                click(button);
+                return true;
+            }
         }
     }
 

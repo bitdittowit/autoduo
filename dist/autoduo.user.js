@@ -319,9 +319,14 @@ var AutoDuo = (function (exports) {
         ];
         for (const selector of selectors) {
             const button = document.querySelector(selector);
-            if (button && !button.disabled) {
-                click(button);
-                return true;
+            if (button) {
+                // Check both disabled property and aria-disabled attribute
+                const isDisabled = button.disabled ||
+                    button.getAttribute('aria-disabled') === 'true';
+                if (!isDisabled) {
+                    click(button);
+                    return true;
+                }
             }
         }
         return false;
@@ -2479,6 +2484,7 @@ var AutoDuo = (function (exports) {
         solve(context) {
             this.log('starting');
             const tapTokens = context.container.querySelectorAll('[data-test="challenge-tap-token"], [data-test="-challenge-tap-token"]');
+            this.log('found tap tokens:', tapTokens.length);
             if (tapTokens.length < 2) {
                 return this.failure('matchPairs', 'Not enough tap tokens');
             }
@@ -2527,20 +2533,26 @@ var AutoDuo = (function (exports) {
                     continue;
                 // Skip disabled tokens
                 if (token.getAttribute('aria-disabled') === 'true') {
+                    this.log('token', i, 'is disabled, skipping');
                     continue;
                 }
                 // Check for "Nearest X" label
                 const nearestLabel = token.querySelector('._27M4R');
                 if (nearestLabel) {
                     const labelText = nearestLabel.textContent ?? '';
+                    this.log('token', i, 'has Nearest label:', labelText);
                     const nearestMatch = labelText.match(/Nearest\s*(\d+)/i);
                     if (nearestMatch?.[1]) {
                         hasNearestRounding = true;
                         roundingBase = parseInt(nearestMatch[1], 10);
                         const tokenData = this.extractRoundingToken(token, i, roundingBase);
                         if (tokenData) {
+                            this.log('token', i, 'extracted rounding:', tokenData.rawValue);
                             tokens.push(tokenData);
                             continue;
+                        }
+                        else {
+                            this.log('token', i, 'failed to extract rounding value');
                         }
                     }
                 }
@@ -2551,6 +2563,7 @@ var AutoDuo = (function (exports) {
                     if (srcdoc?.includes('<svg')) {
                         const fraction = extractPieChartFraction(srcdoc);
                         if (fraction) {
+                            this.log('token', i, 'extracted pie chart:', fraction.value);
                             tokens.push({
                                 index: i,
                                 element: token,
@@ -2567,6 +2580,7 @@ var AutoDuo = (function (exports) {
                 if (value) {
                     const evaluated = evaluateMathExpression(value);
                     const isCompound = this.isCompoundExpression(value);
+                    this.log('token', i, 'extracted KaTeX:', value, '=', evaluated);
                     tokens.push({
                         index: i,
                         element: token,
@@ -2575,6 +2589,9 @@ var AutoDuo = (function (exports) {
                         isExpression: isCompound,
                         isPieChart: false,
                     });
+                }
+                else {
+                    this.log('token', i, 'failed to extract any value');
                 }
             }
             // Store for use in findPairs
