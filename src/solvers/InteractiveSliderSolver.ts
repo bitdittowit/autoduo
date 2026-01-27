@@ -8,6 +8,7 @@ import type { IChallengeContext, ISolverResult } from '../types';
 import { extractKatexValue } from '../parsers/KatexParser';
 import { extractPieChartFraction } from '../parsers/PieChartParser';
 import { evaluateMathExpression } from '../math/expressions';
+import { solveEquationWithBlank } from '../math/equations';
 import { roundToNearest } from '../math/rounding';
 import { findAllIframes, findIframeByContent } from '../dom/selectors';
 
@@ -188,7 +189,7 @@ export class InteractiveSliderSolver extends BaseSolver {
 
             // Equation with blank (duoblank)
             if (text.includes('\\duoblank')) {
-                const result = this.solveEquationWithBlank(text);
+                const result = solveEquationWithBlank(text);
                 if (result !== null) {
                     return { value: result, equation: text };
                 }
@@ -234,61 +235,6 @@ export class InteractiveSliderSolver extends BaseSolver {
                     return { value: result, equation: value };
                 }
             }
-        }
-
-        return null;
-    }
-
-    private solveEquationWithBlank(equation: string): number | null {
-        // Simple equation solver for duoblank
-        // e.g., "3 + \\duoblank{1} = 7" -> 4
-        const cleaned = equation
-            .replace(/\\mathbf\{([^}]+)\}/g, '$1')
-            .replace(/\\duoblank\{\d*\}/g, 'X')
-            .replace(/\\times/g, '*')
-            .replace(/×/g, '*')
-            .replace(/÷/g, '/')
-            .trim();
-
-        // Parse as "left = right" where one side has X
-        const eqParts = cleaned.split('=');
-        if (eqParts.length !== 2) return null;
-
-        const left = eqParts[0]?.trim();
-        const right = eqParts[1]?.trim();
-
-        if (!left || !right) return null;
-
-        // If X is on left side
-        if (left.includes('X')) {
-            const rightValue = evaluateMathExpression(right);
-            if (rightValue === null) return null;
-
-            // Simple cases: X + a = b, a + X = b, X - a = b, etc.
-            if (left === 'X') return rightValue;
-
-            const addMatch = left.match(/X\s*\+\s*(\d+)/);
-            if (addMatch?.[1]) {
-                return rightValue - parseInt(addMatch[1], 10);
-            }
-
-            const subMatch = left.match(/X\s*-\s*(\d+)/);
-            if (subMatch?.[1]) {
-                return rightValue + parseInt(subMatch[1], 10);
-            }
-
-            const prefixAddMatch = left.match(/(\d+)\s*\+\s*X/);
-            if (prefixAddMatch?.[1]) {
-                return rightValue - parseInt(prefixAddMatch[1], 10);
-            }
-        }
-
-        // If X is on right side
-        if (right.includes('X')) {
-            const leftValue = evaluateMathExpression(left);
-            if (leftValue === null) return null;
-
-            if (right === 'X') return leftValue;
         }
 
         return null;

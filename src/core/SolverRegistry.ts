@@ -20,6 +20,7 @@ import { InteractiveSpinnerSolver } from '../solvers/InteractiveSpinnerSolver';
 import { ExpressionBuildSolver } from '../solvers/ExpressionBuildSolver';
 import { FactorTreeSolver } from '../solvers/FactorTreeSolver';
 import { PatternTableSolver } from '../solvers/PatternTableSolver';
+import { PieChartSelectFractionSolver } from '../solvers/PieChartSelectFractionSolver';
 
 /**
  * Регистр солверов - выбирает подходящий солвер для задания
@@ -89,6 +90,7 @@ export class SolverRegistry {
         this.register(new ComparisonChoiceSolver());
         this.register(new SelectOperatorSolver());
         this.register(new PieChartTextInputSolver());
+        this.register(new PieChartSelectFractionSolver());
         this.register(new SelectPieChartSolver());
         this.register(new EquationBlankSolver());
 

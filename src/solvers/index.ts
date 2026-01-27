@@ -17,6 +17,7 @@ export { InteractiveSpinnerSolver } from './InteractiveSpinnerSolver';
 export { ExpressionBuildSolver } from './ExpressionBuildSolver';
 export { FactorTreeSolver } from './FactorTreeSolver';
 export { PatternTableSolver } from './PatternTableSolver';
+export { PieChartSelectFractionSolver } from './PieChartSelectFractionSolver';
 
 // Re-export types
 export type { ISolver, ISolverResult, IChallengeContext } from '../types';

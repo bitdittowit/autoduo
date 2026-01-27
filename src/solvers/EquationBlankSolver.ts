@@ -8,8 +8,8 @@
 import { BaseSolver } from './BaseSolver';
 import type { IChallengeContext, IEquationResult, ISolverResult } from '../types';
 import { extractKatexValue } from '../parsers/KatexParser';
-import { cleanLatexWrappers, convertLatexFractions, convertLatexOperators } from '../parsers/latex';
 import { evaluateMathExpression } from '../math/expressions';
+import { solveEquationWithBlank } from '../math/equations';
 
 export class EquationBlankSolver extends BaseSolver {
     readonly name = 'EquationBlankSolver';
@@ -47,7 +47,7 @@ export class EquationBlankSolver extends BaseSolver {
         this.log('equation =', equation);
 
         // Solve for the blank
-        const answer = this.solveEquation(equation);
+        const answer = solveEquationWithBlank(equation);
         if (answer === null) {
             return this.failure('equationBlank', 'could not solve equation');
         }
@@ -109,73 +109,5 @@ export class EquationBlankSolver extends BaseSolver {
             answer,
             selectedChoice: firstMatch,
         });
-    }
-
-    /**
-     * Решает уравнение с пропуском
-     */
-    private solveEquation(equation: string): number | null {
-        let cleaned = equation
-            .replace(/\\duoblank\{[^}]*\}/g, 'X')
-            .replace(/\s+/g, '');
-
-        cleaned = cleanLatexWrappers(cleaned);
-        cleaned = convertLatexOperators(cleaned);
-        cleaned = convertLatexFractions(cleaned);
-
-        // Split by = to get both sides
-        const parts = cleaned.split('=');
-        if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
-
-        const [left, right] = parts;
-
-        // Determine which side has X
-        if (left.includes('X')) {
-            return this.solveForX(left, right);
-        } else if (right.includes('X')) {
-            return this.solveForX(right, left);
-        }
-
-        return null;
-    }
-
-    /**
-     * Решает выражение относительно X
-     */
-    private solveForX(exprWithX: string, otherSide: string): number | null {
-        const target = evaluateMathExpression(otherSide);
-        if (target === null) return null;
-
-        // Simple patterns
-        const patterns: { pattern: RegExp; solve: (n: number) => number }[] = [
-            { pattern: /^X\+(\d+)$/, solve: (n: number): number => target - n },
-            { pattern: /^X-(\d+)$/, solve: (n: number): number => target + n },
-            { pattern: /^(\d+)\+X$/, solve: (n: number): number => target - n },
-            { pattern: /^(\d+)-X$/, solve: (n: number): number => n - target },
-            { pattern: /^X\*(\d+)$/, solve: (n: number): number => target / n },
-            { pattern: /^(\d+)\*X$/, solve: (n: number): number => target / n },
-            { pattern: /^X\/(\d+)$/, solve: (n: number): number => target * n },
-            { pattern: /^X$/, solve: (): number => target },
-        ];
-
-        for (const { pattern, solve } of patterns) {
-            const match = exprWithX.match(pattern);
-            if (match) {
-                const n = match[1] ? parseInt(match[1], 10) : 0;
-                const result = solve(n);
-                if (Number.isFinite(result)) return result;
-            }
-        }
-
-        // Brute force for complex expressions
-        for (let x = -100; x <= 100; x++) {
-            const testExpr = exprWithX.replace(/X/g, `(${x})`);
-            const testResult = evaluateMathExpression(testExpr);
-            if (testResult !== null && Math.abs(testResult - target) < 0.0001) {
-                return x;
-            }
-        }
-
-        return null;
     }
 }

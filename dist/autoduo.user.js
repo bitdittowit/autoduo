@@ -1317,6 +1317,234 @@ var AutoDuo = (function (exports) {
     }
 
     /**
+     * Решение уравнений с пропуском (X)
+     */
+    /**
+     * Решает уравнение с пропуском вида "A op X = B" или "X op A = B"
+     *
+     * @param equation - уравнение в формате LaTeX
+     * @returns решение или null
+     *
+     * @example
+     * solveEquationWithBlank('3 + \\duoblank{1} = 7') // 4
+     * solveEquationWithBlank('X * 5 = 25') // 5
+     */
+    function solveEquationWithBlank(equation) {
+        logger.debug('solveEquationWithBlank: input', equation);
+        // Clean the equation
+        let cleaned = equation
+            .replace(/\\duoblank\{[^}]*\}/g, 'X')
+            .replace(/\s+/g, '');
+        cleaned = cleanLatexWrappers(cleaned);
+        cleaned = cleanLatexForEval(cleaned);
+        logger.debug('solveEquationWithBlank: cleaned', cleaned);
+        // Split by = to get left and right sides
+        const parts = cleaned.split('=');
+        if (parts.length !== 2 || !parts[0] || !parts[1]) {
+            logger.debug('solveEquationWithBlank: invalid equation format');
+            return null;
+        }
+        const [left, right] = parts;
+        // Optimization: If X is alone on one side
+        if (right === 'X' && !left.includes('X')) {
+            const result = evaluateMathExpression(left);
+            if (result !== null) {
+                logger.debug('solveEquationWithBlank: X alone on right, result =', result);
+                return result;
+            }
+        }
+        if (left === 'X' && !right.includes('X')) {
+            const result = evaluateMathExpression(right);
+            if (result !== null) {
+                logger.debug('solveEquationWithBlank: X alone on left, result =', result);
+                return result;
+            }
+        }
+        // Determine which side has X and solve
+        if (left.includes('X')) {
+            return solveForX(left, right);
+        }
+        else if (right.includes('X')) {
+            return solveForX(right, left);
+        }
+        logger.debug('solveEquationWithBlank: X not found');
+        return null;
+    }
+    /**
+     * Решает выражение с X относительно целевого значения
+     *
+     * @param exprWithX - выражение с X (например "X+4" или "3*X")
+     * @param otherSide - другая сторона уравнения
+     * @returns решение или null
+     */
+    function solveForX(exprWithX, otherSide) {
+        const target = evaluateMathExpression(otherSide);
+        if (target === null) {
+            logger.debug('solveForX: could not evaluate other side');
+            return null;
+        }
+        // Try algebraic patterns first (faster)
+        const algebraicResult = solveAlgebraically(exprWithX, target);
+        if (algebraicResult !== null) {
+            return algebraicResult;
+        }
+        // Fallback to brute force with extended range
+        return solveBruteForce(exprWithX, target, -1e4, 10000);
+    }
+    /**
+     * Пытается решить алгебраически для простых паттернов
+     */
+    function solveAlgebraically(exprWithX, target) {
+        const patterns = [
+            { pattern: /^X$/, solve: () => target },
+            { pattern: /^X\+(\d+)$/, solve: (n) => target - n },
+            { pattern: /^X-(\d+)$/, solve: (n) => target + n },
+            { pattern: /^(\d+)\+X$/, solve: (n) => target - n },
+            { pattern: /^(\d+)-X$/, solve: (n) => n - target },
+            { pattern: /^X\*(\d+)$/, solve: (n) => target / n },
+            { pattern: /^(\d+)\*X$/, solve: (n) => target / n },
+            { pattern: /^X\/(\d+)$/, solve: (n) => target * n },
+            { pattern: /^(\d+)\/X$/, solve: (n) => n / target },
+            // Patterns with parentheses
+            { pattern: /^\(X\)\+(\d+)$/, solve: (n) => target - n },
+            { pattern: /^\(X\)-(\d+)$/, solve: (n) => target + n },
+            { pattern: /^\(X\)\*(\d+)$/, solve: (n) => target / n },
+            { pattern: /^\(X\)\/(\d+)$/, solve: (n) => target * n },
+        ];
+        for (const { pattern, solve } of patterns) {
+            const match = exprWithX.match(pattern);
+            if (match) {
+                const n = match[1] ? parseInt(match[1], 10) : 0;
+                const result = solve(n);
+                if (Number.isFinite(result)) {
+                    logger.debug('solveForX: algebraic solution X =', result);
+                    return result;
+                }
+            }
+        }
+        return null;
+    }
+    /**
+     * Решает перебором в заданном диапазоне
+     */
+    function solveBruteForce(exprWithX, target, min, max) {
+        // Try integer values first
+        for (let x = min; x <= max; x++) {
+            const testExpr = exprWithX.replace(/X/g, `(${x})`);
+            const testResult = evaluateMathExpression(testExpr);
+            if (testResult !== null && Math.abs(testResult - target) < 0.0001) {
+                logger.debug('solveForX: brute force solution X =', x);
+                return x;
+            }
+        }
+        logger.debug('solveForX: no solution found in range', min, 'to', max);
+        return null;
+    }
+    /**
+     * Решает неравенство с пропуском
+     *
+     * @param inequality - неравенство в формате LaTeX
+     * @param denominator - знаменатель для результата (если известен)
+     * @returns дробь как строка "a/b" или null
+     */
+    function solveInequalityWithBlank(inequality, denominator) {
+        let cleaned = cleanLatexWrappers(inequality);
+        // Detect operator
+        let operator = null;
+        if (cleaned.includes('>=') || cleaned.includes('\\ge')) {
+            operator = '>=';
+        }
+        else if (cleaned.includes('<=') || cleaned.includes('\\le')) {
+            operator = '<=';
+        }
+        else if (cleaned.includes('>') || cleaned.includes('\\gt')) {
+            operator = '>';
+        }
+        else if (cleaned.includes('<') || cleaned.includes('\\lt')) {
+            operator = '<';
+        }
+        if (!operator)
+            return null;
+        // Normalize operators
+        cleaned = cleaned
+            .replace(/\\ge/g, '>=')
+            .replace(/\\le/g, '<=')
+            .replace(/\\gt/g, '>')
+            .replace(/\\lt/g, '<');
+        // Split by operator
+        const operatorRegex = />=|<=|>|</;
+        const parts = cleaned.split(operatorRegex);
+        if (parts.length !== 2)
+            return null;
+        const [leftStr, rightStr] = parts;
+        const leftHasBlank = leftStr?.includes('\\duoblank');
+        const rightHasBlank = rightStr?.includes('\\duoblank');
+        if (!leftHasBlank && !rightHasBlank)
+            return null;
+        // Get known value
+        const knownSide = leftHasBlank ? rightStr : leftStr;
+        if (!knownSide)
+            return null;
+        // Parse fraction from known side
+        const fracMatch = knownSide.match(/\\frac\{(\d+)\}\{(\d+)\}/);
+        let knownValue;
+        let knownDenom;
+        if (fracMatch?.[1] && fracMatch[2]) {
+            const num = parseInt(fracMatch[1], 10);
+            knownDenom = parseInt(fracMatch[2], 10);
+            knownValue = num / knownDenom;
+        }
+        else {
+            const numMatch = knownSide.match(/(\d+)/);
+            if (!numMatch?.[1])
+                return null;
+            knownValue = parseFloat(numMatch[1]);
+            knownDenom = 1;
+        }
+        // Calculate target numerator based on inequality direction
+        let targetNum;
+        if (leftHasBlank) {
+            // ? [op] known
+            switch (operator) {
+                case '>':
+                    targetNum = Math.floor(knownValue * knownDenom) + 1;
+                    break;
+                case '>=':
+                    targetNum = Math.ceil(knownValue * knownDenom);
+                    break;
+                case '<':
+                    targetNum = Math.ceil(knownValue * knownDenom) - 1;
+                    break;
+                case '<=':
+                    targetNum = Math.floor(knownValue * knownDenom);
+                    break;
+                default: return null;
+            }
+        }
+        else {
+            // known [op] ?
+            switch (operator) {
+                case '>':
+                    targetNum = Math.ceil(knownValue * knownDenom) - 1;
+                    break;
+                case '>=':
+                    targetNum = Math.floor(knownValue * knownDenom);
+                    break;
+                case '<':
+                    targetNum = Math.floor(knownValue * knownDenom) + 1;
+                    break;
+                case '<=':
+                    targetNum = Math.ceil(knownValue * knownDenom);
+                    break;
+                default: return null;
+            }
+        }
+        if (targetNum <= 0)
+            targetNum = 1;
+        return `${targetNum}/${knownDenom}`;
+    }
+
+    /**
      * Солвер для заданий с вводом ответа (Type the answer)
      *
      * Поддерживает:
@@ -1396,7 +1624,7 @@ var AutoDuo = (function (exports) {
                 return null;
             }
             this.log('detected INEQUALITY with blank type');
-            const answer = this.solveInequalityWithBlank(equation);
+            const answer = solveInequalityWithBlank(equation);
             if (answer === null) {
                 this.logDebug('could not solve inequality');
                 return null;
@@ -1414,7 +1642,7 @@ var AutoDuo = (function (exports) {
          */
         trySolveEquationWithBlank(textInput, equation) {
             this.log('solving as equation with blank');
-            const answer = this.solveEquationWithBlank(equation);
+            const answer = solveEquationWithBlank(equation);
             if (answer === null) {
                 return this.failure('typeAnswer', 'could not solve equation');
             }
@@ -1425,168 +1653,6 @@ var AutoDuo = (function (exports) {
                 equation,
                 answer,
             });
-        }
-        /**
-         * Решает уравнение с пропуском (e.g., "_ + 4 = 7")
-         */
-        solveEquationWithBlank(equation) {
-            // Clean and prepare the equation
-            let cleaned = equation
-                .replace(/\\duoblank\{[^}]*\}/g, 'X') // Replace \duoblank with X
-                .replace(/\s+/g, ''); // Remove whitespace
-            cleaned = cleanLatexWrappers(cleaned);
-            cleaned = cleanLatexForEval(cleaned);
-            this.logDebug('cleaned equation:', cleaned);
-            // Split by = to get left and right sides
-            const parts = cleaned.split('=');
-            if (parts.length !== 2) {
-                this.logDebug('equation does not have exactly one =');
-                return null;
-            }
-            const [left, right] = parts;
-            // Determine which side has X and solve
-            if (left?.includes('X') && right) {
-                return this.solveForX(left, right);
-            }
-            else if (right?.includes('X') && left) {
-                return this.solveForX(right, left);
-            }
-            this.logDebug('X not found in equation');
-            return null;
-        }
-        /**
-         * Решает выражение с X
-         */
-        solveForX(exprWithX, otherSide) {
-            const targetValue = evaluateMathExpression(otherSide);
-            if (targetValue === null) {
-                this.logDebug('could not evaluate other side');
-                return null;
-            }
-            // Try different values for X using binary search or simple iteration
-            // For simple cases like "X + 4" or "X - 3", we can solve algebraically
-            const simplePatterns = [
-                { pattern: /^X\+(\d+)$/, solve: (n) => targetValue - n },
-                { pattern: /^X-(\d+)$/, solve: (n) => targetValue + n },
-                { pattern: /^(\d+)\+X$/, solve: (n) => targetValue - n },
-                { pattern: /^(\d+)-X$/, solve: (n) => n - targetValue },
-                { pattern: /^X\*(\d+)$/, solve: (n) => targetValue / n },
-                { pattern: /^(\d+)\*X$/, solve: (n) => targetValue / n },
-                { pattern: /^X\/(\d+)$/, solve: (n) => targetValue * n },
-                { pattern: /^(\d+)\/X$/, solve: (n) => n / targetValue },
-                { pattern: /^X$/, solve: () => targetValue },
-            ];
-            for (const { pattern, solve } of simplePatterns) {
-                const match = exprWithX.match(pattern);
-                if (match) {
-                    const n = match[1] ? parseInt(match[1], 10) : 0;
-                    const result = solve(n);
-                    if (Number.isFinite(result) && Number.isInteger(result)) {
-                        return result;
-                    }
-                }
-            }
-            // Fallback: try brute force for small integers
-            for (let x = -100; x <= 100; x++) {
-                const testExpr = exprWithX.replace(/X/g, `(${x})`);
-                const testResult = evaluateMathExpression(testExpr);
-                if (testResult !== null && Math.abs(testResult - targetValue) < 0.0001) {
-                    return x;
-                }
-            }
-            this.logDebug('could not solve for X');
-            return null;
-        }
-        /**
-         * Решает неравенство с пропуском
-         */
-        solveInequalityWithBlank(equation) {
-            let cleaned = cleanLatexWrappers(equation);
-            // Detect operator
-            let operator = null;
-            if (cleaned.includes('>=') || cleaned.includes('\\ge')) {
-                operator = '>=';
-            }
-            else if (cleaned.includes('<=') || cleaned.includes('\\le')) {
-                operator = '<=';
-            }
-            else if (cleaned.includes('>') || cleaned.includes('\\gt')) {
-                operator = '>';
-            }
-            else if (cleaned.includes('<') || cleaned.includes('\\lt')) {
-                operator = '<';
-            }
-            if (!operator)
-                return null;
-            // Normalize the operator in the string
-            cleaned = cleaned
-                .replace(/\\ge/g, '>=')
-                .replace(/\\le/g, '<=')
-                .replace(/\\gt/g, '>')
-                .replace(/\\lt/g, '<');
-            // Split by operator
-            const operatorRegex = />=|<=|>|</;
-            const parts = cleaned.split(operatorRegex);
-            if (parts.length !== 2)
-                return null;
-            const [leftStr, rightStr] = parts;
-            // Find which side has the blank
-            const leftHasBlank = leftStr?.includes('\\duoblank');
-            const rightHasBlank = rightStr?.includes('\\duoblank');
-            if (!leftHasBlank && !rightHasBlank)
-                return null;
-            // Evaluate the known side
-            const knownSide = leftHasBlank ? rightStr : leftStr;
-            if (!knownSide)
-                return null;
-            const fractionResult = parseFractionExpression(knownSide);
-            if (!fractionResult)
-                return null;
-            const knownValue = fractionResult.value;
-            const knownDenom = fractionResult.denominator;
-            // Find a fraction that satisfies the inequality
-            // Use the same denominator for simplicity
-            let targetNum;
-            if (leftHasBlank) {
-                // ? [op] known
-                switch (operator) {
-                    case '>':
-                        targetNum = Math.floor(knownValue * knownDenom) + 1;
-                        break;
-                    case '>=':
-                        targetNum = Math.ceil(knownValue * knownDenom);
-                        break;
-                    case '<':
-                        targetNum = Math.ceil(knownValue * knownDenom) - 1;
-                        break;
-                    case '<=':
-                        targetNum = Math.floor(knownValue * knownDenom);
-                        break;
-                    default: return null;
-                }
-            }
-            else {
-                // known [op] ?
-                switch (operator) {
-                    case '>':
-                        targetNum = Math.ceil(knownValue * knownDenom) - 1;
-                        break;
-                    case '>=':
-                        targetNum = Math.floor(knownValue * knownDenom);
-                        break;
-                    case '<':
-                        targetNum = Math.floor(knownValue * knownDenom) + 1;
-                        break;
-                    case '<=':
-                        targetNum = Math.ceil(knownValue * knownDenom);
-                        break;
-                    default: return null;
-                }
-            }
-            // Return as fraction string
-            if (targetNum <= 0)
-                targetNum = 1; // Ensure positive
-            return `${targetNum}/${knownDenom}`;
         }
     }
 
@@ -2280,7 +2346,7 @@ var AutoDuo = (function (exports) {
             const equation = annotation.textContent;
             this.log('equation =', equation);
             // Solve for the blank
-            const answer = this.solveEquation(equation);
+            const answer = solveEquationWithBlank(equation);
             if (answer === null) {
                 return this.failure('equationBlank', 'could not solve equation');
             }
@@ -2334,67 +2400,6 @@ var AutoDuo = (function (exports) {
                 answer,
                 selectedChoice: firstMatch,
             });
-        }
-        /**
-         * Решает уравнение с пропуском
-         */
-        solveEquation(equation) {
-            let cleaned = equation
-                .replace(/\\duoblank\{[^}]*\}/g, 'X')
-                .replace(/\s+/g, '');
-            cleaned = cleanLatexWrappers(cleaned);
-            cleaned = convertLatexOperators(cleaned);
-            cleaned = convertLatexFractions(cleaned);
-            // Split by = to get both sides
-            const parts = cleaned.split('=');
-            if (parts.length !== 2 || !parts[0] || !parts[1])
-                return null;
-            const [left, right] = parts;
-            // Determine which side has X
-            if (left.includes('X')) {
-                return this.solveForX(left, right);
-            }
-            else if (right.includes('X')) {
-                return this.solveForX(right, left);
-            }
-            return null;
-        }
-        /**
-         * Решает выражение относительно X
-         */
-        solveForX(exprWithX, otherSide) {
-            const target = evaluateMathExpression(otherSide);
-            if (target === null)
-                return null;
-            // Simple patterns
-            const patterns = [
-                { pattern: /^X\+(\d+)$/, solve: (n) => target - n },
-                { pattern: /^X-(\d+)$/, solve: (n) => target + n },
-                { pattern: /^(\d+)\+X$/, solve: (n) => target - n },
-                { pattern: /^(\d+)-X$/, solve: (n) => n - target },
-                { pattern: /^X\*(\d+)$/, solve: (n) => target / n },
-                { pattern: /^(\d+)\*X$/, solve: (n) => target / n },
-                { pattern: /^X\/(\d+)$/, solve: (n) => target * n },
-                { pattern: /^X$/, solve: () => target },
-            ];
-            for (const { pattern, solve } of patterns) {
-                const match = exprWithX.match(pattern);
-                if (match) {
-                    const n = match[1] ? parseInt(match[1], 10) : 0;
-                    const result = solve(n);
-                    if (Number.isFinite(result))
-                        return result;
-                }
-            }
-            // Brute force for complex expressions
-            for (let x = -100; x <= 100; x++) {
-                const testExpr = exprWithX.replace(/X/g, `(${x})`);
-                const testResult = evaluateMathExpression(testExpr);
-                if (testResult !== null && Math.abs(testResult - target) < 0.0001) {
-                    return x;
-                }
-            }
-            return null;
         }
     }
 
@@ -2798,7 +2803,7 @@ var AutoDuo = (function (exports) {
                     continue;
                 // Equation with blank (duoblank)
                 if (text.includes('\\duoblank')) {
-                    const result = this.solveEquationWithBlank(text);
+                    const result = solveEquationWithBlank(text);
                     if (result !== null) {
                         return { value: result, equation: text };
                     }
@@ -2836,55 +2841,6 @@ var AutoDuo = (function (exports) {
                         return { value: result, equation: value };
                     }
                 }
-            }
-            return null;
-        }
-        solveEquationWithBlank(equation) {
-            // Simple equation solver for duoblank
-            // e.g., "3 + \\duoblank{1} = 7" -> 4
-            const cleaned = equation
-                .replace(/\\mathbf\{([^}]+)\}/g, '$1')
-                .replace(/\\duoblank\{\d*\}/g, 'X')
-                .replace(/\\times/g, '*')
-                .replace(/×/g, '*')
-                .replace(/÷/g, '/')
-                .trim();
-            // Parse as "left = right" where one side has X
-            const eqParts = cleaned.split('=');
-            if (eqParts.length !== 2)
-                return null;
-            const left = eqParts[0]?.trim();
-            const right = eqParts[1]?.trim();
-            if (!left || !right)
-                return null;
-            // If X is on left side
-            if (left.includes('X')) {
-                const rightValue = evaluateMathExpression(right);
-                if (rightValue === null)
-                    return null;
-                // Simple cases: X + a = b, a + X = b, X - a = b, etc.
-                if (left === 'X')
-                    return rightValue;
-                const addMatch = left.match(/X\s*\+\s*(\d+)/);
-                if (addMatch?.[1]) {
-                    return rightValue - parseInt(addMatch[1], 10);
-                }
-                const subMatch = left.match(/X\s*-\s*(\d+)/);
-                if (subMatch?.[1]) {
-                    return rightValue + parseInt(subMatch[1], 10);
-                }
-                const prefixAddMatch = left.match(/(\d+)\s*\+\s*X/);
-                if (prefixAddMatch?.[1]) {
-                    return rightValue - parseInt(prefixAddMatch[1], 10);
-                }
-            }
-            // If X is on right side
-            if (right.includes('X')) {
-                const leftValue = evaluateMathExpression(left);
-                if (leftValue === null)
-                    return null;
-                if (right === 'X')
-                    return leftValue;
             }
             return null;
         }
@@ -3817,6 +3773,129 @@ var AutoDuo = (function (exports) {
     }
 
     /**
+     * Солвер для выбора дроби по круговой диаграмме
+     *
+     * Показывается pie chart, нужно выбрать соответствующую дробь из вариантов
+     * Это обратный случай от SelectPieChartSolver
+     */
+    class PieChartSelectFractionSolver extends BaseSolver {
+        name = 'PieChartSelectFractionSolver';
+        canSolve(context) {
+            if (!context.choices?.length)
+                return false;
+            // Must have an iframe with pie chart (not in choices)
+            const allIframes = findAllIframes(context.container);
+            // Check if there's a pie chart iframe that's NOT inside a choice
+            for (const iframe of allIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc?.includes('<svg'))
+                    continue;
+                // Check if this iframe is inside a choice
+                const isInChoice = context.choices.some(choice => choice?.contains(iframe));
+                if (!isInChoice) {
+                    // Found pie chart outside choices
+                    // Now check if choices have text fractions (not pie charts)
+                    const choicesHaveText = context.choices.some(choice => {
+                        const annotation = choice?.querySelector('annotation');
+                        return annotation?.textContent?.includes('frac') ||
+                            annotation?.textContent?.includes('/');
+                    });
+                    if (choicesHaveText) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        solve(context) {
+            if (!context.choices?.length) {
+                return this.failure('pieChartSelectFraction', 'no choices found');
+            }
+            this.log('starting');
+            // Find the pie chart iframe
+            const allIframes = findAllIframes(context.container);
+            let pieChartSrcdoc = null;
+            for (const iframe of allIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc?.includes('<svg'))
+                    continue;
+                const isInChoice = context.choices.some(choice => choice?.contains(iframe));
+                if (!isInChoice) {
+                    pieChartSrcdoc = srcdoc;
+                    break;
+                }
+            }
+            if (!pieChartSrcdoc) {
+                return this.failure('pieChartSelectFraction', 'no pie chart found');
+            }
+            // Extract fraction from pie chart
+            const pieChartFraction = extractPieChartFraction(pieChartSrcdoc);
+            if (!pieChartFraction) {
+                return this.failure('pieChartSelectFraction', 'could not extract pie chart fraction');
+            }
+            this.log('pie chart shows', `${pieChartFraction.numerator}/${pieChartFraction.denominator}`, '=', pieChartFraction.value);
+            // Find matching choice
+            let matchedChoiceIndex = -1;
+            let exactMatchIndex = -1;
+            for (let i = 0; i < context.choices.length; i++) {
+                const choice = context.choices[i];
+                if (!choice)
+                    continue;
+                const annotation = choice.querySelector('annotation');
+                if (!annotation?.textContent)
+                    continue;
+                let choiceText = annotation.textContent;
+                // Clean LaTeX wrappers
+                while (choiceText.includes('\\mathbf{')) {
+                    choiceText = extractLatexContent(choiceText, '\\mathbf');
+                }
+                while (choiceText.includes('\\textbf{')) {
+                    choiceText = extractLatexContent(choiceText, '\\textbf');
+                }
+                // Parse the fraction
+                const choiceFraction = parseFractionExpression(choiceText);
+                if (!choiceFraction) {
+                    this.logDebug('choice', i, 'could not parse fraction');
+                    continue;
+                }
+                this.log('choice', i, '=', `${choiceFraction.numerator}/${choiceFraction.denominator}`, '=', choiceFraction.value);
+                // Check for exact match first
+                const exactMatch = choiceFraction.numerator === pieChartFraction.numerator &&
+                    choiceFraction.denominator === pieChartFraction.denominator;
+                // Check for value match (equivalent fractions)
+                const valueMatch = Math.abs(choiceFraction.value - pieChartFraction.value) < 0.0001;
+                if (exactMatch) {
+                    exactMatchIndex = i;
+                    this.log('EXACT MATCH at choice', i);
+                    break;
+                }
+                else if (valueMatch && matchedChoiceIndex === -1) {
+                    matchedChoiceIndex = i;
+                    this.log('VALUE MATCH at choice', i);
+                    // Don't break - continue looking for exact match
+                }
+            }
+            // Prefer exact match over value match
+            const finalIndex = exactMatchIndex !== -1 ? exactMatchIndex : matchedChoiceIndex;
+            if (finalIndex === -1) {
+                return this.failure('pieChartSelectFraction', `no matching choice for ${pieChartFraction.numerator}/${pieChartFraction.denominator}`);
+            }
+            // Click the matched choice
+            const matchedChoice = context.choices[finalIndex];
+            if (matchedChoice) {
+                this.log('clicking choice', finalIndex);
+                this.click(matchedChoice);
+            }
+            return this.success({
+                type: 'pieChartSelectFraction',
+                pieChartNumerator: pieChartFraction.numerator,
+                pieChartDenominator: pieChartFraction.denominator,
+                selectedChoice: finalIndex,
+            });
+        }
+    }
+
+    /**
      * Регистр всех доступных солверов
      */
     /**
@@ -3881,6 +3960,7 @@ var AutoDuo = (function (exports) {
             this.register(new ComparisonChoiceSolver());
             this.register(new SelectOperatorSolver());
             this.register(new PieChartTextInputSolver());
+            this.register(new PieChartSelectFractionSolver());
             this.register(new SelectPieChartSolver());
             this.register(new EquationBlankSolver());
             // Generic solvers last (catch-all)
@@ -4426,6 +4506,7 @@ var AutoDuo = (function (exports) {
     exports.LogPanel = LogPanel;
     exports.MatchPairsSolver = MatchPairsSolver;
     exports.PatternTableSolver = PatternTableSolver;
+    exports.PieChartSelectFractionSolver = PieChartSelectFractionSolver;
     exports.PieChartTextInputSolver = PieChartTextInputSolver;
     exports.RoundToNearestSolver = RoundToNearestSolver;
     exports.SelectEquivalentFractionSolver = SelectEquivalentFractionSolver;

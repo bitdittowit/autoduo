@@ -10,9 +10,11 @@
 import { BaseSolver } from './BaseSolver';
 import type { IChallengeContext, IEquationResult, IFractionResult, ISolverResult } from '../types';
 import { simplifyFraction } from '../math/fractions';
-import { evaluateMathExpression } from '../math/expressions';
 import { parseFractionExpression } from '../parsers/FractionParser';
-import { cleanLatexForEval, cleanLatexWrappers } from '../parsers/latex';
+import {
+    solveEquationWithBlank,
+    solveInequalityWithBlank,
+} from '../math/equations';
 
 export class TypeAnswerSolver extends BaseSolver {
     readonly name = 'TypeAnswerSolver';
@@ -110,7 +112,7 @@ export class TypeAnswerSolver extends BaseSolver {
 
         this.log('detected INEQUALITY with blank type');
 
-        const answer = this.solveInequalityWithBlank(equation);
+        const answer = solveInequalityWithBlank(equation);
         if (answer === null) {
             this.logDebug('could not solve inequality');
             return null;
@@ -135,7 +137,7 @@ export class TypeAnswerSolver extends BaseSolver {
     ): IEquationResult | null {
         this.log('solving as equation with blank');
 
-        const answer = this.solveEquationWithBlank(equation);
+        const answer = solveEquationWithBlank(equation);
         if (answer === null) {
             return this.failure('typeAnswer', 'could not solve equation') as IEquationResult | null;
         }
@@ -148,166 +150,5 @@ export class TypeAnswerSolver extends BaseSolver {
             equation,
             answer,
         });
-    }
-
-    /**
-     * Решает уравнение с пропуском (e.g., "_ + 4 = 7")
-     */
-    private solveEquationWithBlank(equation: string): number | null {
-        // Clean and prepare the equation
-        let cleaned = equation
-            .replace(/\\duoblank\{[^}]*\}/g, 'X')  // Replace \duoblank with X
-            .replace(/\s+/g, '');                   // Remove whitespace
-
-        cleaned = cleanLatexWrappers(cleaned);
-        cleaned = cleanLatexForEval(cleaned);
-
-        this.logDebug('cleaned equation:', cleaned);
-
-        // Split by = to get left and right sides
-        const parts = cleaned.split('=');
-        if (parts.length !== 2) {
-            this.logDebug('equation does not have exactly one =');
-            return null;
-        }
-
-        const [left, right] = parts;
-
-        // Determine which side has X and solve
-        if (left?.includes('X') && right) {
-            return this.solveForX(left, right);
-        } else if (right?.includes('X') && left) {
-            return this.solveForX(right, left);
-        }
-
-        this.logDebug('X not found in equation');
-        return null;
-    }
-
-    /**
-     * Решает выражение с X
-     */
-    private solveForX(exprWithX: string, otherSide: string): number | null {
-        const targetValue = evaluateMathExpression(otherSide);
-        if (targetValue === null) {
-            this.logDebug('could not evaluate other side');
-            return null;
-        }
-
-        // Try different values for X using binary search or simple iteration
-        // For simple cases like "X + 4" or "X - 3", we can solve algebraically
-        const simplePatterns: { pattern: RegExp; solve: (n: number) => number }[] = [
-            { pattern: /^X\+(\d+)$/, solve: (n: number): number => targetValue - n },
-            { pattern: /^X-(\d+)$/, solve: (n: number): number => targetValue + n },
-            { pattern: /^(\d+)\+X$/, solve: (n: number): number => targetValue - n },
-            { pattern: /^(\d+)-X$/, solve: (n: number): number => n - targetValue },
-            { pattern: /^X\*(\d+)$/, solve: (n: number): number => targetValue / n },
-            { pattern: /^(\d+)\*X$/, solve: (n: number): number => targetValue / n },
-            { pattern: /^X\/(\d+)$/, solve: (n: number): number => targetValue * n },
-            { pattern: /^(\d+)\/X$/, solve: (n: number): number => n / targetValue },
-            { pattern: /^X$/, solve: (): number => targetValue },
-        ];
-
-        for (const { pattern, solve } of simplePatterns) {
-            const match = exprWithX.match(pattern);
-            if (match) {
-                const n = match[1] ? parseInt(match[1], 10) : 0;
-                const result = solve(n);
-                if (Number.isFinite(result) && Number.isInteger(result)) {
-                    return result;
-                }
-            }
-        }
-
-        // Fallback: try brute force for small integers
-        for (let x = -100; x <= 100; x++) {
-            const testExpr = exprWithX.replace(/X/g, `(${x})`);
-            const testResult = evaluateMathExpression(testExpr);
-            if (testResult !== null && Math.abs(testResult - targetValue) < 0.0001) {
-                return x;
-            }
-        }
-
-        this.logDebug('could not solve for X');
-        return null;
-    }
-
-    /**
-     * Решает неравенство с пропуском
-     */
-    private solveInequalityWithBlank(equation: string): string | null {
-        let cleaned = cleanLatexWrappers(equation);
-
-        // Detect operator
-        let operator: string | null = null;
-        if (cleaned.includes('>=') || cleaned.includes('\\ge')) {
-            operator = '>=';
-        } else if (cleaned.includes('<=') || cleaned.includes('\\le')) {
-            operator = '<=';
-        } else if (cleaned.includes('>') || cleaned.includes('\\gt')) {
-            operator = '>';
-        } else if (cleaned.includes('<') || cleaned.includes('\\lt')) {
-            operator = '<';
-        }
-
-        if (!operator) return null;
-
-        // Normalize the operator in the string
-        cleaned = cleaned
-            .replace(/\\ge/g, '>=')
-            .replace(/\\le/g, '<=')
-            .replace(/\\gt/g, '>')
-            .replace(/\\lt/g, '<');
-
-        // Split by operator
-        const operatorRegex = />=|<=|>|</;
-        const parts = cleaned.split(operatorRegex);
-        if (parts.length !== 2) return null;
-
-        const [leftStr, rightStr] = parts;
-
-        // Find which side has the blank
-        const leftHasBlank = leftStr?.includes('\\duoblank');
-        const rightHasBlank = rightStr?.includes('\\duoblank');
-
-        if (!leftHasBlank && !rightHasBlank) return null;
-
-        // Evaluate the known side
-        const knownSide = leftHasBlank ? rightStr : leftStr;
-        if (!knownSide) return null;
-
-        const fractionResult = parseFractionExpression(knownSide);
-        if (!fractionResult) return null;
-
-        const knownValue = fractionResult.value;
-        const knownDenom = fractionResult.denominator;
-
-        // Find a fraction that satisfies the inequality
-        // Use the same denominator for simplicity
-        let targetNum: number;
-
-        if (leftHasBlank) {
-            // ? [op] known
-            switch (operator) {
-            case '>': targetNum = Math.floor(knownValue * knownDenom) + 1; break;
-            case '>=': targetNum = Math.ceil(knownValue * knownDenom); break;
-            case '<': targetNum = Math.ceil(knownValue * knownDenom) - 1; break;
-            case '<=': targetNum = Math.floor(knownValue * knownDenom); break;
-            default: return null;
-            }
-        } else {
-            // known [op] ?
-            switch (operator) {
-            case '>': targetNum = Math.ceil(knownValue * knownDenom) - 1; break;
-            case '>=': targetNum = Math.floor(knownValue * knownDenom); break;
-            case '<': targetNum = Math.floor(knownValue * knownDenom) + 1; break;
-            case '<=': targetNum = Math.ceil(knownValue * knownDenom); break;
-            default: return null;
-            }
-        }
-
-        // Return as fraction string
-        if (targetNum <= 0) targetNum = 1; // Ensure positive
-        return `${targetNum}/${knownDenom}`;
     }
 }
