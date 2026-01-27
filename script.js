@@ -1640,6 +1640,33 @@ function solveMathSelectPieChart(challengeContainer, equationContainer, choices)
     
     LOG('solveMathSelectPieChart: target value =', targetValue);
     
+    // Check if this is a comparison challenge (has <, >, <=, >=)
+    // E.g., "1/6 < ?" means we need to find a pie chart where 1/6 < pieChartValue is TRUE
+    let comparisonOperator = null;
+    const cleanedForComparison = equation
+        .replace(/\\mathbf\{/g, '').replace(/\\textbf\{/g, '')
+        .replace(/\\duoblank\{[^}]*\}/g, '?')
+        .replace(/\s+/g, '');
+    
+    // Check for comparison operators (but not inside \frac or similar)
+    if (cleanedForComparison.includes('<=') || cleanedForComparison.includes('\\le')) {
+        comparisonOperator = '<=';
+    } else if (cleanedForComparison.includes('>=') || cleanedForComparison.includes('\\ge')) {
+        comparisonOperator = '>=';
+    } else if (cleanedForComparison.includes('<') && !cleanedForComparison.includes('\\lt')) {
+        comparisonOperator = '<';
+    } else if (cleanedForComparison.includes('\\lt')) {
+        comparisonOperator = '<';
+    } else if (cleanedForComparison.includes('>') && !cleanedForComparison.includes('\\gt')) {
+        comparisonOperator = '>';
+    } else if (cleanedForComparison.includes('\\gt')) {
+        comparisonOperator = '>';
+    }
+    
+    if (comparisonOperator) {
+        LOG('solveMathSelectPieChart: detected COMPARISON mode, operator =', comparisonOperator);
+    }
+    
     // Now find the choice whose pie chart matches the target value
     let matchedChoiceIndex = -1;
     
@@ -1668,16 +1695,45 @@ function solveMathSelectPieChart(challengeContainer, equationContainer, choices)
         LOG('solveMathSelectPieChart: choice', i, '- pie chart fraction =', 
             fraction.numerator + '/' + fraction.denominator, '=', fraction.value);
         
-        // Compare with target value (with tolerance for floating point)
-        if (Math.abs(fraction.value - targetValue) < 0.0001) {
-            matchedChoiceIndex = i;
-            LOG('solveMathSelectPieChart: MATCH found at choice', i);
-            break;
+        // Handle comparison challenges
+        if (comparisonOperator) {
+            let comparisonResult = false;
+            switch (comparisonOperator) {
+                case '<':
+                    comparisonResult = targetValue < fraction.value;
+                    break;
+                case '>':
+                    comparisonResult = targetValue > fraction.value;
+                    break;
+                case '<=':
+                    comparisonResult = targetValue <= fraction.value;
+                    break;
+                case '>=':
+                    comparisonResult = targetValue >= fraction.value;
+                    break;
+            }
+            
+            LOG_DEBUG('solveMathSelectPieChart: comparison', targetValue, comparisonOperator, fraction.value, '=', comparisonResult);
+            
+            if (comparisonResult) {
+                matchedChoiceIndex = i;
+                LOG('solveMathSelectPieChart: COMPARISON TRUE at choice', i, 
+                    '(', targetValue, comparisonOperator, fraction.value, ')');
+                break;
+            }
+        } else {
+            // Compare with target value (with tolerance for floating point)
+            if (Math.abs(fraction.value - targetValue) < 0.0001) {
+                matchedChoiceIndex = i;
+                LOG('solveMathSelectPieChart: MATCH found at choice', i);
+                break;
+            }
         }
     }
     
     if (matchedChoiceIndex === -1) {
-        LOG_ERROR('solveMathSelectPieChart: no matching pie chart found for target value', targetValue);
+        LOG_ERROR('solveMathSelectPieChart: no matching pie chart found for target value', targetValue,
+                  comparisonOperator ? '(comparison mode: ' + comparisonOperator + ')' : '');
         return null;
     }
     
