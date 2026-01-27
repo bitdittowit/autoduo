@@ -128,6 +128,12 @@ src/
 
 ## Последние изменения
 
+### v1.0.1 (2026-01-25)
+- **Исправлено:** Ошибочный выбор `ExpressionBuildSolver` для заданий типа `NumberLine`
+  - Уточнена логика `ExpressionBuildSolver.canSolve()`: теперь проверяется наличие уравнения с `\duoblank`
+  - Это предотвращает ложное срабатывание на чистые NumberLine задания, которые могут содержать строки 'exprBuild' или 'ExpressionBuild' в комментариях/переменных
+  - Теперь задания с числовой линией (NumberLine) корректно обрабатываются `InteractiveSliderSolver`
+
 ### v1.0.0 (2026-01-27)
 - **Исправлено:** Ошибочный выбор `InteractiveSliderSolver` для заданий типа `ExpressionBuild`
   - `ExpressionBuildSolver` теперь регистрируется перед `InteractiveSliderSolver` в `SolverRegistry`

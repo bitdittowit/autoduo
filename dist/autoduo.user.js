@@ -3452,13 +3452,23 @@ var AutoDuo = (function (exports) {
         name = 'ExpressionBuildSolver';
         canSolve(context) {
             const allIframes = findAllIframes(context.container);
+            // Check for ExpressionBuild iframe
+            let hasExpressionBuildIframe = false;
             for (const iframe of allIframes) {
                 const srcdoc = iframe.getAttribute('srcdoc');
                 if (srcdoc?.includes('exprBuild') || srcdoc?.includes('ExpressionBuild')) {
-                    return true;
+                    hasExpressionBuildIframe = true;
+                    break;
                 }
             }
-            return false;
+            if (!hasExpressionBuildIframe) {
+                return false;
+            }
+            // Additional check: ExpressionBuild tasks have equations with \duoblank
+            // This distinguishes them from pure NumberLine tasks that might have
+            // 'exprBuild' or 'ExpressionBuild' in comments/variable names
+            const targetValue = this.extractTargetValue(context);
+            return targetValue !== null;
         }
         solve(context) {
             this.log('starting');
