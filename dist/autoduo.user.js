@@ -4171,12 +4171,26 @@ var AutoDuo = (function (exports) {
          * Основной цикл
          */
         async runLoop() {
+            let stuckCounter = 0;
+            const maxStuckAttempts = 5;
             while (this.isRunning) {
                 try {
                     // Check if on result screen (lesson complete)
                     if (isOnResultScreen()) {
                         logger.info('AutoRunner: lesson complete, looking for next...');
-                        clickContinueButton();
+                        const clicked = clickContinueButton();
+                        if (!clicked) {
+                            stuckCounter++;
+                            logger.warn(`AutoRunner: cannot click continue (attempt ${stuckCounter}/${maxStuckAttempts})`);
+                            if (stuckCounter >= maxStuckAttempts) {
+                                logger.error('AutoRunner: stuck on result screen, stopping');
+                                this.stop();
+                                break;
+                            }
+                        }
+                        else {
+                            stuckCounter = 0;
+                        }
                         await delay$1(1000);
                         continue;
                     }
@@ -4189,6 +4203,7 @@ var AutoDuo = (function (exports) {
                             this.stop();
                             break;
                         }
+                        stuckCounter = 0;
                         await delay$1(2000); // Wait for lesson to load
                         continue;
                     }
@@ -4199,10 +4214,23 @@ var AutoDuo = (function (exports) {
                             this.stop();
                             break;
                         }
-                        clickContinueButton();
+                        const clicked = clickContinueButton();
+                        if (!clicked) {
+                            stuckCounter++;
+                            if (stuckCounter >= maxStuckAttempts) {
+                                logger.error('AutoRunner: stuck on incorrect screen, stopping');
+                                this.stop();
+                                break;
+                            }
+                        }
+                        else {
+                            stuckCounter = 0;
+                        }
                         await delay$1(this.config.delayBetweenActions);
                         continue;
                     }
+                    // Reset stuck counter on normal progress
+                    stuckCounter = 0;
                     // Try to solve
                     const solved = await this.solveOne();
                     if (solved) {

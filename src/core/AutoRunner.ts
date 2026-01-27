@@ -79,12 +79,26 @@ export class AutoRunner {
      * Основной цикл
      */
     private async runLoop(): Promise<void> {
+        let stuckCounter = 0;
+        const maxStuckAttempts = 5;
+
         while (this.isRunning) {
             try {
                 // Check if on result screen (lesson complete)
                 if (isOnResultScreen()) {
                     logger.info('AutoRunner: lesson complete, looking for next...');
-                    clickContinueButton();
+                    const clicked = clickContinueButton();
+                    if (!clicked) {
+                        stuckCounter++;
+                        logger.warn(`AutoRunner: cannot click continue (attempt ${stuckCounter}/${maxStuckAttempts})`);
+                        if (stuckCounter >= maxStuckAttempts) {
+                            logger.error('AutoRunner: stuck on result screen, stopping');
+                            this.stop();
+                            break;
+                        }
+                    } else {
+                        stuckCounter = 0;
+                    }
                     await delay(1000);
                     continue;
                 }
@@ -98,6 +112,7 @@ export class AutoRunner {
                         this.stop();
                         break;
                     }
+                    stuckCounter = 0;
                     await delay(2000); // Wait for lesson to load
                     continue;
                 }
@@ -109,10 +124,23 @@ export class AutoRunner {
                         this.stop();
                         break;
                     }
-                    clickContinueButton();
+                    const clicked = clickContinueButton();
+                    if (!clicked) {
+                        stuckCounter++;
+                        if (stuckCounter >= maxStuckAttempts) {
+                            logger.error('AutoRunner: stuck on incorrect screen, stopping');
+                            this.stop();
+                            break;
+                        }
+                    } else {
+                        stuckCounter = 0;
+                    }
                     await delay(this.config.delayBetweenActions);
                     continue;
                 }
+
+                // Reset stuck counter on normal progress
+                stuckCounter = 0;
 
                 // Try to solve
                 const solved = await this.solveOne();
