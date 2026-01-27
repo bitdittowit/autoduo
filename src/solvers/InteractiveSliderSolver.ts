@@ -46,6 +46,10 @@ export class InteractiveSliderSolver extends BaseSolver {
         for (const iframe of allIframes) {
             const srcdoc = iframe.getAttribute('srcdoc');
             if (srcdoc?.includes('NumberLine')) {
+                // Exclude if this is an ExpressionBuild component
+                if (srcdoc.includes('exprBuild') || srcdoc.includes('ExpressionBuild')) {
+                    continue;
+                }
                 return true;
             }
         }

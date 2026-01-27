@@ -121,10 +121,18 @@ src/
 
 ## Статистика
 
-- 16 солверов
-- 170+ тестов
+- 18 солверов
+- 178+ тестов
 - ~60 TypeScript файлов
 - 100% покрытие типами
+
+## Последние изменения
+
+### v1.0.0 (2026-01-27)
+- **Исправлено:** Ошибочный выбор `InteractiveSliderSolver` для заданий типа `ExpressionBuild`
+  - `ExpressionBuildSolver` теперь регистрируется перед `InteractiveSliderSolver` в `SolverRegistry`
+  - Добавлена проверка исключения в `InteractiveSliderSolver.canSolve()` для фильтрации iframe с ExpressionBuild
+  - Теперь задания "Построй выражение" (например, `300 = ___` → `3 × 100`) решаются корректно
 
 ## Лицензия
 
