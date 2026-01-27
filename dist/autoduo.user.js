@@ -3305,6 +3305,518 @@ var AutoDuo = (function (exports) {
     }
 
     /**
+     * Солвер для построения выражений
+     * Drag-and-drop токенов для составления выражения равного целевому значению
+     */
+    class ExpressionBuildSolver extends BaseSolver {
+        name = 'ExpressionBuildSolver';
+        canSolve(context) {
+            const allIframes = findAllIframes(context.container);
+            for (const iframe of allIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc?.includes('exprBuild') || srcdoc?.includes('ExpressionBuild')) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        solve(context) {
+            this.log('starting');
+            // Get target value from equation
+            const targetValue = this.extractTargetValue(context);
+            if (targetValue === null) {
+                return this.failure('expressionBuild', 'Could not determine target value');
+            }
+            this.log('target value =', targetValue);
+            // Find expression build iframe
+            const allIframes = findAllIframes(context.container);
+            const iframe = findIframeByContent(allIframes, 'exprBuild') ??
+                findIframeByContent(allIframes, 'ExpressionBuild');
+            if (!iframe) {
+                return this.failure('expressionBuild', 'No expression build iframe found');
+            }
+            // Get tokens and entries from iframe
+            const { tokens, numEntries } = this.extractTokensAndEntries(iframe);
+            if (tokens.length === 0) {
+                return this.failure('expressionBuild', 'Could not find tokens');
+            }
+            this.log('tokens =', JSON.stringify(tokens), ', numEntries =', numEntries);
+            // Find solution
+            const solution = this.findExpressionSolution(tokens, numEntries, targetValue);
+            if (!solution) {
+                this.logError('could not find solution for target', targetValue);
+                return this.failure('expressionBuild', 'No solution found');
+            }
+            this.log('found solution - indices:', solution);
+            // Set solution in iframe
+            this.setSolution(iframe, solution);
+            return {
+                type: 'expressionBuild',
+                success: true,
+                targetValue,
+                solution,
+            };
+        }
+        extractTargetValue(context) {
+            const annotations = context.container.querySelectorAll('annotation');
+            for (const annotation of annotations) {
+                const text = annotation.textContent ?? '';
+                if (text.includes('\\duoblank')) {
+                    // Format: "12 = \duoblank{3}"
+                    const match = text.match(/(\d+)\s*=\s*\\duoblank/);
+                    if (match?.[1]) {
+                        return parseInt(match[1], 10);
+                    }
+                    // Format: "\duoblank{3} = 12"
+                    const matchReverse = text.match(/\\duoblank\{\d+\}\s*=\s*(\d+)/);
+                    if (matchReverse?.[1]) {
+                        return parseInt(matchReverse[1], 10);
+                    }
+                }
+            }
+            return null;
+        }
+        extractTokensAndEntries(iframe) {
+            const tokens = [];
+            let numEntries = 0;
+            try {
+                const iframeWindow = iframe.contentWindow;
+                const iframeDoc = iframe.contentDocument ?? iframeWindow?.document ?? null;
+                // Try to access exprBuild directly
+                if (iframeWindow?.exprBuild) {
+                    const windowTokens = iframeWindow.tokens ?? [];
+                    tokens.push(...windowTokens);
+                    numEntries = iframeWindow.exprBuild.entries?.length ?? 0;
+                }
+                // If not found, parse from script content
+                if (tokens.length === 0 && iframeDoc) {
+                    const scripts = iframeDoc.querySelectorAll('script');
+                    for (const script of scripts) {
+                        const content = script.textContent ?? '';
+                        // Parse tokens array
+                        const tokensMatch = content.match(/const\s+tokens\s*=\s*\[(.*?)\];/s);
+                        if (tokensMatch?.[1]) {
+                            this.parseTokensString(tokensMatch[1], tokens);
+                        }
+                        // Parse entries count
+                        const entriesMatch = content.match(/entries:\s*\[(null,?\s*)+\]/);
+                        if (entriesMatch) {
+                            const nullMatches = entriesMatch[0].match(/null/g);
+                            numEntries = nullMatches?.length ?? 0;
+                        }
+                    }
+                }
+            }
+            catch (e) {
+                this.logError('error extracting tokens:', e);
+            }
+            return { tokens, numEntries };
+        }
+        parseTokensString(tokensStr, tokens) {
+            const tokenParts = tokensStr.split(',').map(t => t.trim());
+            for (const part of tokenParts) {
+                // renderNumber(X) -> X
+                const numMatch = part.match(/renderNumber\((\d+)\)/);
+                if (numMatch?.[1]) {
+                    tokens.push(parseInt(numMatch[1], 10));
+                }
+                else {
+                    // String token like "+" or "-"
+                    const strMatch = part.match(/"([^"]+)"|'([^']+)'/);
+                    if (strMatch) {
+                        tokens.push(strMatch[1] ?? strMatch[2] ?? '');
+                    }
+                }
+            }
+        }
+        findExpressionSolution(tokens, numEntries, target) {
+            // Separate numbers and operators
+            const numbers = [];
+            const operators = [];
+            for (let i = 0; i < tokens.length; i++) {
+                const token = tokens[i];
+                if (typeof token === 'number') {
+                    numbers.push({ value: token, index: i });
+                }
+                else if (token &&
+                    ['+', '-', '*', '/', '×', '÷'].includes(token)) {
+                    operators.push({ value: token, index: i });
+                }
+            }
+            // For numEntries = 1
+            if (numEntries === 1) {
+                for (const num of numbers) {
+                    if (num.value === target) {
+                        return [num.index];
+                    }
+                }
+                return null;
+            }
+            // For numEntries = 3: num1 op num2
+            if (numEntries === 3) {
+                return this.findThreeTokenSolution(numbers, operators, target);
+            }
+            // For numEntries = 5: num1 op1 num2 op2 num3
+            if (numEntries === 5) {
+                return this.findFiveTokenSolution(numbers, operators, target);
+            }
+            return null;
+        }
+        findThreeTokenSolution(numbers, operators, target) {
+            for (const num1 of numbers) {
+                for (const op of operators) {
+                    for (const num2 of numbers) {
+                        if (num1.index === num2.index)
+                            continue;
+                        const result = this.evaluateOp(num1.value, op.value, num2.value);
+                        if (result === target) {
+                            this.log('found:', num1.value, op.value, num2.value, '=', target);
+                            return [num1.index, op.index, num2.index];
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+        findFiveTokenSolution(numbers, operators, target) {
+            for (const num1 of numbers) {
+                for (const op1 of operators) {
+                    for (const num2 of numbers) {
+                        if (num2.index === num1.index)
+                            continue;
+                        for (const op2 of operators) {
+                            if (op2.index === op1.index)
+                                continue;
+                            for (const num3 of numbers) {
+                                if (num3.index === num1.index ||
+                                    num3.index === num2.index)
+                                    continue;
+                                const expr = `${num1.value}${op1.value}${num2.value}${op2.value}${num3.value}`;
+                                const result = evaluateMathExpression(expr);
+                                if (result === target) {
+                                    this.log('found:', expr, '=', target);
+                                    return [
+                                        num1.index,
+                                        op1.index,
+                                        num2.index,
+                                        op2.index,
+                                        num3.index,
+                                    ];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+        evaluateOp(a, op, b) {
+            switch (op) {
+                case '+':
+                    return a + b;
+                case '-':
+                    return a - b;
+                case '*':
+                case '×':
+                    return a * b;
+                case '/':
+                case '÷':
+                    return b !== 0 ? a / b : null;
+                default:
+                    return null;
+            }
+        }
+        setSolution(iframe, solution) {
+            try {
+                const iframeWindow = iframe.contentWindow;
+                if (!iframeWindow)
+                    return;
+                // Set filled_entry_indices
+                if (typeof iframeWindow.getOutputVariables === 'function') {
+                    const vars = iframeWindow.getOutputVariables();
+                    if (vars) {
+                        vars.filled_entry_indices = solution;
+                        this.log('set filled_entry_indices');
+                    }
+                }
+                else if (iframeWindow.OUTPUT_VARS) {
+                    iframeWindow.OUTPUT_VARS.filled_entry_indices = solution;
+                }
+                // Trigger callbacks
+                if (typeof iframeWindow.postOutputVariables === 'function') {
+                    iframeWindow.postOutputVariables();
+                }
+                if (iframeWindow.duo?.onFirstInteraction) {
+                    iframeWindow.duo.onFirstInteraction();
+                }
+                if (iframeWindow.duoDynamic?.onInteraction) {
+                    iframeWindow.duoDynamic.onInteraction();
+                }
+            }
+            catch (e) {
+                this.logError('error setting solution:', e);
+            }
+        }
+    }
+
+    /**
+     * Солвер для дерева факторов
+     * Размещает числа в дереве факторов где parent = left * right
+     */
+    class FactorTreeSolver extends BaseSolver {
+        name = 'FactorTreeSolver';
+        canSolve(context) {
+            const allIframes = findAllIframes(context.container);
+            for (const iframe of allIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc?.includes('originalTree') && srcdoc.includes('originalTokens')) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        solve(context) {
+            this.log('starting');
+            const allIframes = findAllIframes(context.container);
+            const iframe = findIframeByContent(allIframes, 'originalTree');
+            if (!iframe) {
+                return this.failure('factorTree', 'No factor tree iframe found');
+            }
+            const srcdoc = iframe.getAttribute('srcdoc');
+            if (!srcdoc) {
+                return this.failure('factorTree', 'No srcdoc found');
+            }
+            // Parse originalTree
+            const tree = this.parseTree(srcdoc);
+            if (!tree) {
+                return this.failure('factorTree', 'Could not parse tree');
+            }
+            // Parse originalTokens
+            const tokens = this.parseTokens(srcdoc);
+            if (tokens.length === 0) {
+                return this.failure('factorTree', 'No tokens found');
+            }
+            this.logDebug('tokens =', JSON.stringify(tokens));
+            // Find blanks and their expected values
+            const blanks = this.findBlanks(tree);
+            this.logDebug('blanks =', JSON.stringify(blanks));
+            // Match tokens to blanks
+            const tokenTreeIndices = this.matchTokensToBlanks(tokens, blanks);
+            this.log('solution tokenTreeIndices =', JSON.stringify(tokenTreeIndices));
+            // Set solution
+            const success = this.setSolution(iframe, tokenTreeIndices);
+            const result = {
+                type: 'factorTree',
+                success,
+                tokenTreeIndices,
+            };
+            return result;
+        }
+        parseTree(srcdoc) {
+            const treeMatch = srcdoc.match(/const\s+originalTree\s*=\s*(\{[\s\S]*?\});/);
+            if (!treeMatch?.[1]) {
+                this.logError('could not find originalTree in srcdoc');
+                return null;
+            }
+            try {
+                return JSON.parse(treeMatch[1]);
+            }
+            catch (e) {
+                this.logError('failed to parse originalTree:', e);
+                return null;
+            }
+        }
+        parseTokens(srcdoc) {
+            const tokensMatch = srcdoc.match(/const\s+originalTokens\s*=\s*\[([\s\S]*?)\];/);
+            if (!tokensMatch?.[1]) {
+                this.logError('could not find originalTokens in srcdoc');
+                return [];
+            }
+            const tokens = [];
+            const numberMatches = tokensMatch[1].matchAll(/renderNumber\((\d+)\)/g);
+            for (const match of numberMatches) {
+                if (match[1]) {
+                    tokens.push(parseInt(match[1], 10));
+                }
+            }
+            return tokens;
+        }
+        findBlanks(tree) {
+            const blanks = [];
+            const traverse = (node, treeIndex) => {
+                if (!node)
+                    return;
+                // If this node is a blank, calculate expected value
+                if (node.value === null) {
+                    let expectedValue = null;
+                    const leftValue = node.left?.value !== null && node.left?.value !== undefined
+                        ? node.left.value
+                        : null;
+                    const rightValue = node.right?.value !== null && node.right?.value !== undefined
+                        ? node.right.value
+                        : null;
+                    if (leftValue !== null && rightValue !== null) {
+                        expectedValue = leftValue * rightValue;
+                        this.logDebug('blank at index', treeIndex, 'expected =', leftValue, '*', rightValue, '=', expectedValue);
+                    }
+                    blanks.push({ treeIndex, expectedValue });
+                }
+                // Recursively traverse children
+                traverse(node.left, treeIndex * 2);
+                traverse(node.right, treeIndex * 2 + 1);
+            };
+            // Start from root at index 1
+            traverse(tree, 1);
+            return blanks;
+        }
+        matchTokensToBlanks(tokens, blanks) {
+            const tokenTreeIndices = new Array(tokens.length).fill(0);
+            const usedBlanks = new Set();
+            for (let i = 0; i < tokens.length; i++) {
+                const token = tokens[i];
+                for (const blank of blanks) {
+                    if (blank.expectedValue === token &&
+                        !usedBlanks.has(blank.treeIndex)) {
+                        tokenTreeIndices[i] = blank.treeIndex;
+                        usedBlanks.add(blank.treeIndex);
+                        this.logDebug('token', token, '(index', i, ') -> tree position', blank.treeIndex);
+                        break;
+                    }
+                }
+            }
+            return tokenTreeIndices;
+        }
+        setSolution(iframe, solution) {
+            let success = false;
+            try {
+                const iframeWindow = iframe.contentWindow;
+                if (!iframeWindow)
+                    return false;
+                // Set tokenTreeIndices
+                if (typeof iframeWindow.getOutputVariables === 'function') {
+                    const vars = iframeWindow.getOutputVariables();
+                    if (vars && 'tokenTreeIndices' in vars) {
+                        vars.tokenTreeIndices = solution;
+                        success = true;
+                        this.log('set tokenTreeIndices via getOutputVariables');
+                    }
+                }
+                if (!success && iframeWindow.OUTPUT_VARS) {
+                    iframeWindow.OUTPUT_VARS.tokenTreeIndices = solution;
+                    success = true;
+                    this.log('set tokenTreeIndices via OUTPUT_VARS');
+                }
+                // Trigger callbacks
+                if (typeof iframeWindow.postOutputVariables === 'function') {
+                    iframeWindow.postOutputVariables();
+                }
+                if (iframeWindow.duo?.onFirstInteraction) {
+                    iframeWindow.duo.onFirstInteraction();
+                }
+                if (iframeWindow.duoDynamic?.onInteraction) {
+                    iframeWindow.duoDynamic.onInteraction();
+                }
+                // PostMessage fallback
+                iframeWindow.postMessage({ type: 'outputVariables', payload: { tokenTreeIndices: solution } }, '*');
+            }
+            catch (e) {
+                this.logError('error setting solution:', e);
+            }
+            return success;
+        }
+    }
+
+    /**
+     * Солвер для таблиц с паттернами
+     * Вычисляет ответ для выражения в таблице и выбирает правильный вариант
+     */
+    class PatternTableSolver extends BaseSolver {
+        name = 'PatternTableSolver';
+        canSolve(context) {
+            // Look for pattern table element
+            const patternTable = context.container.querySelector('.ihM27');
+            if (!patternTable)
+                return false;
+            // Should have at least some cells
+            const cells = context.container.querySelectorAll('.ihM27');
+            return cells.length >= 4;
+        }
+        solve(context) {
+            this.log('starting');
+            // Find all table cells
+            const cells = context.container.querySelectorAll('.ihM27');
+            this.log('found', cells.length, 'cells');
+            // Parse cells into rows (2 cells per row: expression, result)
+            const questionExpression = this.findQuestionExpression(cells);
+            if (!questionExpression) {
+                return this.failure('patternTable', 'Could not find question expression');
+            }
+            this.log('question expression:', questionExpression);
+            // Calculate the answer
+            const answer = evaluateMathExpression(questionExpression);
+            this.log('calculated answer:', answer);
+            if (answer === null) {
+                return this.failure('patternTable', 'Could not evaluate expression');
+            }
+            // Find and click the correct choice
+            const choices = context.container.querySelectorAll(SELECTORS.CHALLENGE_CHOICE);
+            const choiceIndex = this.findMatchingChoice(choices, answer);
+            if (choiceIndex === -1) {
+                return this.failure('patternTable', `Could not find matching choice for answer ${answer}`);
+            }
+            // Click the choice
+            const choice = choices[choiceIndex];
+            if (choice) {
+                this.log('clicking choice', choiceIndex);
+                this.click(choice);
+            }
+            return {
+                type: 'patternTable',
+                success: true,
+                expression: questionExpression,
+                answer,
+                choiceIndex,
+            };
+        }
+        findQuestionExpression(cells) {
+            // Cells alternate: expression (class _15lZ-), result (class pCN63)
+            // Find the row where result is "?"
+            for (let i = 0; i < cells.length; i += 2) {
+                const exprCell = cells[i];
+                const resultCell = cells[i + 1];
+                if (!exprCell || !resultCell)
+                    continue;
+                const exprValue = extractKatexValue(exprCell);
+                const resultValue = extractKatexValue(resultCell);
+                this.logDebug('row', i / 2, '- expression:', exprValue, '- result:', resultValue);
+                // Check if this is the question row
+                if (resultValue === '?') {
+                    return exprValue;
+                }
+            }
+            return null;
+        }
+        findMatchingChoice(choices, answer) {
+            this.log('found', choices.length, 'choices');
+            for (let i = 0; i < choices.length; i++) {
+                const choice = choices[i];
+                if (!choice)
+                    continue;
+                const choiceValue = extractKatexValue(choice);
+                this.logDebug('choice', i, '- value:', choiceValue);
+                if (choiceValue === null)
+                    continue;
+                const choiceNum = parseFloat(choiceValue);
+                if (!isNaN(choiceNum) && choiceNum === answer) {
+                    this.log('found matching choice at index', i);
+                    return i;
+                }
+            }
+            return -1;
+        }
+    }
+
+    /**
      * Регистр всех доступных солверов
      */
     /**
@@ -3359,7 +3871,10 @@ var AutoDuo = (function (exports) {
             // Interactive iframe solvers (most specific)
             this.register(new InteractiveSliderSolver());
             this.register(new InteractiveSpinnerSolver());
+            this.register(new ExpressionBuildSolver());
+            this.register(new FactorTreeSolver());
             this.register(new MatchPairsSolver());
+            this.register(new PatternTableSolver());
             // Specific challenge type solvers
             this.register(new RoundToNearestSolver());
             this.register(new SelectEquivalentFractionSolver());
@@ -3900,6 +4415,8 @@ var AutoDuo = (function (exports) {
     exports.ComparisonChoiceSolver = ComparisonChoiceSolver;
     exports.ControlPanel = ControlPanel;
     exports.EquationBlankSolver = EquationBlankSolver;
+    exports.ExpressionBuildSolver = ExpressionBuildSolver;
+    exports.FactorTreeSolver = FactorTreeSolver;
     exports.InteractiveSliderSolver = InteractiveSliderSolver;
     exports.InteractiveSpinnerSolver = InteractiveSpinnerSolver;
     exports.LOG = LOG;
@@ -3908,6 +4425,7 @@ var AutoDuo = (function (exports) {
     exports.LOG_WARN = LOG_WARN;
     exports.LogPanel = LogPanel;
     exports.MatchPairsSolver = MatchPairsSolver;
+    exports.PatternTableSolver = PatternTableSolver;
     exports.PieChartTextInputSolver = PieChartTextInputSolver;
     exports.RoundToNearestSolver = RoundToNearestSolver;
     exports.SelectEquivalentFractionSolver = SelectEquivalentFractionSolver;

@@ -17,6 +17,9 @@ import { EquationBlankSolver } from '../solvers/EquationBlankSolver';
 import { MatchPairsSolver } from '../solvers/MatchPairsSolver';
 import { InteractiveSliderSolver } from '../solvers/InteractiveSliderSolver';
 import { InteractiveSpinnerSolver } from '../solvers/InteractiveSpinnerSolver';
+import { ExpressionBuildSolver } from '../solvers/ExpressionBuildSolver';
+import { FactorTreeSolver } from '../solvers/FactorTreeSolver';
+import { PatternTableSolver } from '../solvers/PatternTableSolver';
 
 /**
  * Регистр солверов - выбирает подходящий солвер для задания
@@ -75,7 +78,10 @@ export class SolverRegistry {
         // Interactive iframe solvers (most specific)
         this.register(new InteractiveSliderSolver());
         this.register(new InteractiveSpinnerSolver());
+        this.register(new ExpressionBuildSolver());
+        this.register(new FactorTreeSolver());
         this.register(new MatchPairsSolver());
+        this.register(new PatternTableSolver());
 
         // Specific challenge type solvers
         this.register(new RoundToNearestSolver());

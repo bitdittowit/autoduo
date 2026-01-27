@@ -14,6 +14,9 @@ export { EquationBlankSolver } from './EquationBlankSolver';
 export { MatchPairsSolver } from './MatchPairsSolver';
 export { InteractiveSliderSolver } from './InteractiveSliderSolver';
 export { InteractiveSpinnerSolver } from './InteractiveSpinnerSolver';
+export { ExpressionBuildSolver } from './ExpressionBuildSolver';
+export { FactorTreeSolver } from './FactorTreeSolver';
+export { PatternTableSolver } from './PatternTableSolver';
 
 // Re-export types
 export type { ISolver, ISolverResult, IChallengeContext } from '../types';
