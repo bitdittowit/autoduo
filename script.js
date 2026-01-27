@@ -1478,6 +1478,14 @@ function solveMathSelectOperator(challengeContainer, equationContainer, choices)
         choiceText = choiceText.replace(/\\mathbf\{([^}]+)\}/g, '$1');
         choiceText = choiceText.trim();
         
+        // Normalize LaTeX operators to ASCII
+        choiceText = choiceText.replace(/\\lt/g, '<');
+        choiceText = choiceText.replace(/\\gt/g, '>');
+        choiceText = choiceText.replace(/\\le/g, '<=');
+        choiceText = choiceText.replace(/\\ge/g, '>=');
+        choiceText = choiceText.replace(/\\leq/g, '<=');
+        choiceText = choiceText.replace(/\\geq/g, '>=');
+        
         LOG_DEBUG('solveMathSelectOperator: choice', i, '=', choiceText);
         
         if (choiceText === correctOperator) {
