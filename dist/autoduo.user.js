@@ -2529,10 +2529,16 @@ var AutoDuo = (function (exports) {
         canSolve(context) {
             // Match pairs have tap tokens and usually "Match" in header
             const hasHeader = this.headerContains(context, 'match', 'pair');
-            const hasTapTokens = (context.choices?.length ?? 0) >= 4;
             // Check for tap token elements specifically (both variants)
             const tapTokens = context.container.querySelectorAll('[data-test="challenge-tap-token"], [data-test="-challenge-tap-token"]');
-            return (hasHeader || tapTokens.length >= 4) && hasTapTokens;
+            // Need at least 2 tokens to form a pair
+            // Also check if there are any active (non-disabled) tokens remaining
+            const activeTokens = Array.from(tapTokens).filter(token => token.getAttribute('aria-disabled') !== 'true');
+            // Return true if:
+            // 1. Has header indicating match pairs, OR
+            // 2. Has at least 4 tap tokens (typical match pairs challenge)
+            // AND has at least 2 active tokens (can form at least one pair)
+            return (hasHeader || tapTokens.length >= 4) && activeTokens.length >= 2;
         }
         solve(context) {
             this.log('starting');
@@ -2541,10 +2547,20 @@ var AutoDuo = (function (exports) {
             if (tapTokens.length < 2) {
                 return this.failure('matchPairs', 'Not enough tap tokens');
             }
-            // Extract values from all tokens
+            // Extract values from all tokens (only active/clickable ones)
             const tokens = this.extractTokens(Array.from(tapTokens));
             this.log('active tokens:', tokens.length);
             if (tokens.length < 2) {
+                // Check if challenge is already complete (all pairs matched)
+                const allDisabled = Array.from(tapTokens).every(token => token.getAttribute('aria-disabled') === 'true');
+                if (allDisabled && tapTokens.length >= 2) {
+                    this.log('all pairs already matched, challenge complete');
+                    return this.success({
+                        type: 'matchPairs',
+                        pairs: [],
+                        clickedPair: { first: '', second: '' },
+                    });
+                }
                 return this.failure('matchPairs', 'Not enough active tokens');
             }
             // Find matching pairs
@@ -2553,17 +2569,33 @@ var AutoDuo = (function (exports) {
                 this.logError('no matching pairs found');
                 return this.failure('matchPairs', 'No matching pairs found');
             }
-            // Click the first pair
-            const pair = pairs[0];
-            if (!pair) {
+            this.log('found', pairs.length, 'pairs to match');
+            // Click all pairs sequentially
+            // Start clicking the first pair immediately
+            const firstPair = pairs[0];
+            if (!firstPair) {
                 return this.failure('matchPairs', 'No pair to click');
             }
-            this.log('clicking pair:', pair.first.rawValue, '↔', pair.second.rawValue);
-            this.click(pair.first.element);
-            // Click second with delay
+            this.log('clicking pair:', firstPair.first.rawValue, '↔', firstPair.second.rawValue);
+            this.click(firstPair.first.element);
+            // Click second element of first pair with delay
             setTimeout(() => {
-                this.click(pair.second.element);
+                this.click(firstPair.second.element);
             }, 100);
+            // If there are more pairs, click them sequentially with delays
+            // This allows DOM to update between clicks
+            for (let i = 1; i < pairs.length; i++) {
+                const pair = pairs[i];
+                if (!pair)
+                    continue;
+                setTimeout(() => {
+                    this.log('clicking pair:', pair.first.rawValue, '↔', pair.second.rawValue);
+                    this.click(pair.first.element);
+                    setTimeout(() => {
+                        this.click(pair.second.element);
+                    }, 100);
+                }, 300 * i); // Delay increases for each subsequent pair
+            }
             return this.success({
                 type: 'matchPairs',
                 pairs: pairs.map(p => ({
@@ -2571,8 +2603,8 @@ var AutoDuo = (function (exports) {
                     second: p.second.rawValue,
                 })),
                 clickedPair: {
-                    first: pair.first.rawValue,
-                    second: pair.second.rawValue,
+                    first: firstPair.first.rawValue,
+                    second: firstPair.second.rawValue,
                 },
             });
         }
