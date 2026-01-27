@@ -2170,35 +2170,53 @@ function solveMathRoundToNearest(challengeContainer, equationContainer, choices,
     const roundedValue = Math.round(numberToRound / roundingBase) * roundingBase;
     LOG('solveMathRoundToNearest:', numberToRound, 'rounds to', roundedValue);
     
-    // Find the choice with matching block count
+    // Find the choice with matching value (block diagram or KaTeX number)
     let matchedChoice = null;
     let matchedIndex = -1;
     
     for (let i = 0; i < choices.length; i++) {
         const choice = choices[i];
+        
+        // First try: block diagram in iframe
         const iframe = choice.querySelector('iframe[title="Math Web Element"]');
+        if (iframe) {
+            const srcdoc = iframe.getAttribute('srcdoc');
+            if (srcdoc) {
+                const blockCount = extractBlockDiagramValue(srcdoc);
+                LOG_DEBUG('solveMathRoundToNearest: choice', i, 'has', blockCount, 'blocks');
+                
+                if (blockCount !== null && blockCount === roundedValue) {
+                    matchedChoice = choice;
+                    matchedIndex = i;
+                    LOG('solveMathRoundToNearest: found matching choice', i, 'with', blockCount, 'blocks');
+                    break;
+                }
+                continue;
+            }
+        }
         
-        if (!iframe) {
-            LOG_DEBUG('solveMathRoundToNearest: choice', i, 'has no iframe');
+        // Second try: KaTeX number in choice
+        const choiceAnnotation = choice.querySelector('annotation');
+        if (choiceAnnotation) {
+            let choiceText = choiceAnnotation.textContent.trim();
+            // Clean up LaTeX wrappers
+            choiceText = choiceText.replace(/\\mathbf\{([^}]+)\}/g, '$1');
+            choiceText = choiceText.replace(/\\textbf\{([^}]+)\}/g, '$1');
+            choiceText = choiceText.trim();
+            
+            const choiceValue = parseInt(choiceText);
+            LOG_DEBUG('solveMathRoundToNearest: choice', i, 'KaTeX value =', choiceValue);
+            
+            if (!isNaN(choiceValue) && choiceValue === roundedValue) {
+                matchedChoice = choice;
+                matchedIndex = i;
+                LOG('solveMathRoundToNearest: found matching choice', i, 'with KaTeX value', choiceValue);
+                break;
+            }
             continue;
         }
         
-        const srcdoc = iframe.getAttribute('srcdoc');
-        if (!srcdoc) {
-            LOG_DEBUG('solveMathRoundToNearest: choice', i, 'has no srcdoc');
-            continue;
-        }
-        
-        // Count blocks in this choice
-        const blockCount = extractBlockDiagramValue(srcdoc);
-        LOG_DEBUG('solveMathRoundToNearest: choice', i, 'has', blockCount, 'blocks');
-        
-        if (blockCount !== null && blockCount === roundedValue) {
-            matchedChoice = choice;
-            matchedIndex = i;
-            LOG('solveMathRoundToNearest: found matching choice', i, 'with', blockCount, 'blocks');
-            break;
-        }
+        LOG_DEBUG('solveMathRoundToNearest: choice', i, 'has no iframe or KaTeX');
     }
     
     if (!matchedChoice) {
@@ -2211,6 +2229,11 @@ function solveMathRoundToNearest(challengeContainer, equationContainer, choices,
                 if (srcdoc) {
                     const blockCount = extractBlockDiagramValue(srcdoc);
                     LOG_DEBUG('solveMathRoundToNearest: choice', i, '=', blockCount, 'blocks');
+                }
+            } else {
+                const ann = choices[i].querySelector('annotation');
+                if (ann) {
+                    LOG_DEBUG('solveMathRoundToNearest: choice', i, '= KaTeX:', ann.textContent.trim());
                 }
             }
         }
