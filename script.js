@@ -1007,13 +1007,36 @@ function solveMathChallengeBlob() {
             return solveMathSelectEquivalentFraction(challengeContainer, equationContainer, choices);
         }
         
+        // Check if this is "Select Operator" type - blank between two values
+        // E.g., "3/6 ? 1/6" with choices <, =, >
+        const hasBlank = eqText.includes('\\duoblank');
+        const choicesHaveIframes = choices.length > 0 && choices[0].querySelector('iframe');
+        
+        // Check if choices are operators
+        let choicesAreOperators = false;
+        if (choices.length > 0 && !choicesHaveIframes) {
+            const firstChoiceAnnotation = choices[0].querySelector('annotation');
+            if (firstChoiceAnnotation) {
+                const choiceText = firstChoiceAnnotation.textContent.trim();
+                // Operators: <, >, =, <=, >=, \lt, \gt, \le, \ge
+                choicesAreOperators = /^[<>=]$/.test(choiceText) || 
+                                       /^\\(lt|gt|le|ge)$/.test(choiceText) ||
+                                       choiceText === '\\mathbf{<}' || 
+                                       choiceText === '\\mathbf{>}' || 
+                                       choiceText === '\\mathbf{=}';
+            }
+        }
+        
+        if (hasBlank && choices.length > 0 && choicesAreOperators) {
+            LOG('solveMathChallengeBlob: detected SELECT OPERATOR type (choices are operators)');
+            return solveMathSelectOperator(challengeContainer, equationContainer, choices);
+        }
+        
         // Check if this is a comparison challenge with choices (e.g., "1/4 > ?")
         // Has comparison operator AND \duoblank AND choices with fractions (not pie charts)
         const hasComparison = eqText.includes('<') || eqText.includes('>') || 
                               eqText.includes('\\lt') || eqText.includes('\\gt') ||
                               eqText.includes('\\le') || eqText.includes('\\ge');
-        const hasBlank = eqText.includes('\\duoblank');
-        const choicesHaveIframes = choices.length > 0 && choices[0].querySelector('iframe');
         
         if (hasComparison && hasBlank && choices.length > 0 && !choicesHaveIframes) {
             LOG('solveMathChallengeBlob: detected COMPARISON CHOICE type (text fraction choices)');
@@ -1312,6 +1335,172 @@ function solveMathComparisonChoice(challengeContainer, equationContainer, choice
         type: 'comparisonChoice',
         leftValue: leftValue,
         operator: comparisonOperator,
+        choiceIndex: correctChoiceIndex
+    };
+}
+
+/**
+ * Solve "Select Operator" type - select comparison operator between two values
+ * E.g., "3/6 ? 1/6" with choices <, =, >
+ */
+function solveMathSelectOperator(challengeContainer, equationContainer, choices) {
+    LOG('solveMathSelectOperator: starting');
+    
+    // Extract the equation from KaTeX
+    const annotation = equationContainer.querySelector('annotation');
+    if (!annotation) {
+        LOG_ERROR('solveMathSelectOperator: annotation not found');
+        return null;
+    }
+    
+    const eqText = annotation.textContent;
+    LOG('solveMathSelectOperator: equation =', eqText);
+    
+    // Parse the equation to extract left and right values
+    // Format: {value1}\;\duoblank{N}\;{value2} or similar
+    let cleanedExpr = eqText;
+    
+    // Remove \mathbf{}, \textbf{} wrappers
+    while (cleanedExpr.includes('\\mathbf{')) {
+        cleanedExpr = extractLatexContent(cleanedExpr, '\\mathbf');
+    }
+    while (cleanedExpr.includes('\\textbf{')) {
+        cleanedExpr = extractLatexContent(cleanedExpr, '\\textbf');
+    }
+    
+    // Replace \duoblank with a marker
+    cleanedExpr = cleanedExpr.replace(/\\duoblank\{[^}]*\}/g, ' BLANK ');
+    
+    // Remove LaTeX spacing commands
+    cleanedExpr = cleanedExpr.replace(/\\;/g, ' ');
+    cleanedExpr = cleanedExpr.replace(/\\,/g, ' ');
+    cleanedExpr = cleanedExpr.replace(/\\quad/g, ' ');
+    cleanedExpr = cleanedExpr.replace(/\s+/g, ' ').trim();
+    
+    LOG_DEBUG('solveMathSelectOperator: after cleanup =', cleanedExpr);
+    
+    // Split by BLANK to get left and right parts
+    const parts = cleanedExpr.split('BLANK');
+    if (parts.length !== 2) {
+        LOG_ERROR('solveMathSelectOperator: could not split by BLANK, parts =', parts.length);
+        return null;
+    }
+    
+    let leftPart = parts[0].trim();
+    let rightPart = parts[1].trim();
+    
+    // Remove outer braces if present
+    if (leftPart.startsWith('{') && leftPart.endsWith('}')) {
+        leftPart = leftPart.substring(1, leftPart.length - 1);
+    }
+    if (rightPart.startsWith('{') && rightPart.endsWith('}')) {
+        rightPart = rightPart.substring(1, rightPart.length - 1);
+    }
+    
+    LOG_DEBUG('solveMathSelectOperator: left part =', leftPart, ', right part =', rightPart);
+    
+    // Convert fractions in both parts
+    const convertFractions = (str) => {
+        while (str.includes('\\frac{')) {
+            const fracMatch = str.match(/\\frac\{/);
+            if (!fracMatch) break;
+            
+            const fracStart = fracMatch.index;
+            let numStart = fracStart + 6;
+            let depth = 1;
+            let numEnd = numStart;
+            while (depth > 0 && numEnd < str.length) {
+                if (str[numEnd] === '{') depth++;
+                else if (str[numEnd] === '}') depth--;
+                numEnd++;
+            }
+            const numerator = str.substring(numStart, numEnd - 1);
+            
+            let denomStart = numEnd + 1;
+            depth = 1;
+            let denomEnd = denomStart;
+            while (depth > 0 && denomEnd < str.length) {
+                if (str[denomEnd] === '{') depth++;
+                else if (str[denomEnd] === '}') depth--;
+                denomEnd++;
+            }
+            const denominator = str.substring(denomStart, denomEnd - 1);
+            
+            str = str.substring(0, fracStart) + '(' + numerator + '/' + denominator + ')' + str.substring(denomEnd);
+        }
+        return str;
+    };
+    
+    leftPart = convertFractions(leftPart);
+    rightPart = convertFractions(rightPart);
+    
+    // Remove any remaining braces
+    leftPart = leftPart.replace(/[{}]/g, '').trim();
+    rightPart = rightPart.replace(/[{}]/g, '').trim();
+    
+    LOG_DEBUG('solveMathSelectOperator: converted left =', leftPart, ', right =', rightPart);
+    
+    // Evaluate both parts
+    const leftValue = evaluateMathExpression(leftPart);
+    const rightValue = evaluateMathExpression(rightPart);
+    
+    if (leftValue === null || rightValue === null) {
+        LOG_ERROR('solveMathSelectOperator: could not evaluate parts, left =', leftValue, ', right =', rightValue);
+        return null;
+    }
+    
+    LOG('solveMathSelectOperator: left value =', leftValue, ', right value =', rightValue);
+    
+    // Determine the correct operator
+    let correctOperator = null;
+    if (Math.abs(leftValue - rightValue) < 0.0001) {
+        correctOperator = '=';
+    } else if (leftValue < rightValue) {
+        correctOperator = '<';
+    } else {
+        correctOperator = '>';
+    }
+    
+    LOG('solveMathSelectOperator: correct operator =', correctOperator);
+    
+    // Find and click the correct choice
+    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+    let correctChoiceIndex = -1;
+    
+    for (let i = 0; i < choices.length; i++) {
+        const choice = choices[i];
+        const choiceAnnotation = choice.querySelector('annotation');
+        if (!choiceAnnotation) continue;
+        
+        let choiceText = choiceAnnotation.textContent.trim();
+        
+        // Normalize the choice text
+        choiceText = choiceText.replace(/\\mathbf\{([^}]+)\}/g, '$1');
+        choiceText = choiceText.trim();
+        
+        LOG_DEBUG('solveMathSelectOperator: choice', i, '=', choiceText);
+        
+        if (choiceText === correctOperator) {
+            correctChoiceIndex = i;
+            LOG('solveMathSelectOperator: found matching choice at index', i);
+            break;
+        }
+    }
+    
+    if (correctChoiceIndex === -1) {
+        LOG_ERROR('solveMathSelectOperator: no matching operator found in choices');
+        return null;
+    }
+    
+    // Click the correct choice
+    LOG('solveMathSelectOperator: clicking choice', correctChoiceIndex);
+    choices[correctChoiceIndex].dispatchEvent(clickEvent);
+    
+    return {
+        type: 'selectOperator',
+        leftValue: leftValue,
+        rightValue: rightValue,
+        correctOperator: correctOperator,
         choiceIndex: correctChoiceIndex
     };
 }
