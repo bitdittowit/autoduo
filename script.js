@@ -2692,7 +2692,8 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
     
     // Extract values from all tokens
     const tokens = [];
-    let hasNearest10 = false;  // Flag for "Nearest 10" matching mode
+    let hasNearestRounding = false;  // Flag for "Nearest X" matching mode
+    let roundingBase = 10;  // Default rounding base (10, 100, 1000, etc.)
     
     for (let i = 0; i < tapTokens.length; i++) {
         const token = tapTokens[i];
@@ -2704,29 +2705,55 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
             continue;
         }
         
-        // Check for "Nearest 10" label (block diagram tokens)
-        const nearest10Label = token.querySelector('._27M4R');
-        if (nearest10Label && nearest10Label.textContent.includes('Nearest 10')) {
-            hasNearest10 = true;
-            
-            // This is a block diagram - extract value from iframe SVG
-            const iframe = token.querySelector('iframe[title="Math Web Element"]');
-            if (iframe) {
-                const srcdoc = iframe.getAttribute('srcdoc');
-                if (srcdoc) {
-                    const blockCount = extractBlockDiagramValue(srcdoc);
-                    if (blockCount !== null) {
-                        tokens.push({
-                            index: i,
-                            element: token,
-                            rawValue: `${blockCount} blocks`,
-                            numericValue: blockCount,
-                            isBlockDiagram: true,
-                            isPieChart: false
-                        });
-                        LOG_DEBUG('solveMathMatchPairs: token', i, '- block diagram:', blockCount, 'blocks');
-                        continue;
+        // Check for "Nearest X" label (rounding target tokens)
+        const nearestLabel = token.querySelector('._27M4R');
+        if (nearestLabel) {
+            const labelText = nearestLabel.textContent;
+            const nearestMatch = labelText.match(/Nearest\s*(\d+)/i);
+            if (nearestMatch) {
+                hasNearestRounding = true;
+                roundingBase = parseInt(nearestMatch[1]);
+                LOG_DEBUG('solveMathMatchPairs: token', i, 'has Nearest', roundingBase, 'label');
+                
+                // First check if it's a block diagram in iframe
+                const iframe = token.querySelector('iframe[title="Math Web Element"]');
+                if (iframe) {
+                    const srcdoc = iframe.getAttribute('srcdoc');
+                    if (srcdoc) {
+                        const blockCount = extractBlockDiagramValue(srcdoc);
+                        if (blockCount !== null) {
+                            tokens.push({
+                                index: i,
+                                element: token,
+                                rawValue: `${blockCount} blocks`,
+                                numericValue: blockCount,
+                                isBlockDiagram: true,
+                                isPieChart: false,
+                                isRoundingTarget: true,
+                                roundingBase: roundingBase
+                            });
+                            LOG_DEBUG('solveMathMatchPairs: token', i, '- block diagram (Nearest', roundingBase, '):', blockCount, 'blocks');
+                            continue;
+                        }
                     }
+                }
+                
+                // Otherwise it's a KaTeX number with "Nearest X" label
+                const value = extractKatexValue(token);
+                if (value) {
+                    const evaluated = evaluateMathExpression(value);
+                    tokens.push({
+                        index: i,
+                        element: token,
+                        rawValue: value,
+                        numericValue: evaluated,
+                        isBlockDiagram: false,
+                        isPieChart: false,
+                        isRoundingTarget: true,
+                        roundingBase: roundingBase
+                    });
+                    LOG_DEBUG('solveMathMatchPairs: token', i, '- rounding target (Nearest', roundingBase, '):', value, '=', evaluated);
+                    continue;
                 }
             }
         }
@@ -2736,8 +2763,8 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
         if (iframe) {
             const srcdoc = iframe.getAttribute('srcdoc');
             if (srcdoc && srcdoc.includes('<svg')) {
-                // Skip if already processed as block diagram
-                if (nearest10Label) continue;
+                // Skip if already processed as rounding target
+                if (nearestLabel) continue;
                 
                 const fraction = extractPieChartFraction(srcdoc);
                 if (fraction) {
@@ -2794,35 +2821,38 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
     // Check for different matching modes
     const blockDiagrams = tokens.filter(t => t.isBlockDiagram);
     const pieCharts = tokens.filter(t => t.isPieChart);
+    const roundingTargets = tokens.filter(t => t.isRoundingTarget);
+    const sourceNumbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget);
     const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram);
     
     LOG('solveMathMatchPairs: blockDiagrams:', blockDiagrams.length, ', pieCharts:', pieCharts.length, 
+        ', roundingTargets:', roundingTargets.length, ', sourceNumbers:', sourceNumbers.length,
         ', numbers/expressions:', numbers.length);
     
     // Find matching pairs
     const pairs = [];
     const usedIndices = new Set();
     
-    // MODE 1: "Nearest 10" matching - block diagrams with numbers
-    if (hasNearest10 && blockDiagrams.length > 0 && numbers.length > 0) {
-        LOG('solveMathMatchPairs: using Nearest 10 matching mode');
+    // MODE 1: "Nearest X" matching - rounding targets with source numbers
+    if (hasNearestRounding && roundingTargets.length > 0 && sourceNumbers.length > 0) {
+        LOG('solveMathMatchPairs: using Nearest', roundingBase, 'matching mode');
         
-        for (const num of numbers) {
+        for (const num of sourceNumbers) {
             if (usedIndices.has(num.index)) continue;
             
-            // Round to nearest 10
-            const rounded = Math.round(num.numericValue / 10) * 10;
-            LOG_DEBUG('solveMathMatchPairs: number', num.numericValue, 'rounds to', rounded);
+            // Round to nearest X (use roundingBase from the target tokens)
+            const rounded = Math.round(num.numericValue / roundingBase) * roundingBase;
+            LOG_DEBUG('solveMathMatchPairs: number', num.numericValue, 'rounds to nearest', roundingBase, '→', rounded);
             
-            // Find matching block diagram
-            for (const block of blockDiagrams) {
-                if (usedIndices.has(block.index)) continue;
+            // Find matching rounding target
+            for (const target of roundingTargets) {
+                if (usedIndices.has(target.index)) continue;
                 
-                if (block.numericValue === rounded) {
-                    pairs.push({ first: num, second: block });
+                if (target.numericValue === rounded) {
+                    pairs.push({ first: num, second: target });
                     usedIndices.add(num.index);
-                    usedIndices.add(block.index);
-                    LOG('solveMathMatchPairs: found Nearest 10 pair:', num.rawValue, '→', rounded, '↔', block.rawValue);
+                    usedIndices.add(target.index);
+                    LOG('solveMathMatchPairs: found Nearest', roundingBase, 'pair:', num.rawValue, '→', rounded, '↔', target.rawValue);
                     break;
                 }
             }
