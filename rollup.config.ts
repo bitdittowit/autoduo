@@ -1,7 +1,7 @@
 import { defineConfig } from 'rollup';
 import typescript from '@rollup/plugin-typescript';
 import resolve from '@rollup/plugin-node-resolve';
-// import terser from '@rollup/plugin-terser';
+import terser from '@rollup/plugin-terser';
 
 const pkg = { version: '1.0.0' };
 
@@ -31,6 +31,6 @@ export default defineConfig({
             tsconfig: './tsconfig.json',
             include: ['src/**/*.ts'],
         }),
-        // terser() - раскомментировать для минификации
+        terser()
     ],
 });

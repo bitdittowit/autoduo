@@ -7,7 +7,7 @@ import { BaseSolver } from './BaseSolver';
 import type { IChallengeContext, ISolverResult } from '../types';
 import { extractKatexValue } from '../parsers/KatexParser';
 import { extractPieChartFraction } from '../parsers/PieChartParser';
-import { extractBlockDiagramValue } from '../parsers/BlockDiagramParser';
+import { extractBlockDiagramValue, isBlockDiagram } from '../parsers/BlockDiagramParser';
 import { evaluateMathExpression } from '../math/expressions';
 import { roundToNearest } from '../math/rounding';
 
@@ -143,13 +143,30 @@ export class MatchPairsSolver extends BaseSolver {
                 }
             }
 
-            // Check for iframe with pie chart or block diagram
+            // Check for iframe with block diagram or pie chart
             const iframe = token.querySelector<HTMLIFrameElement>(
                 'iframe[title="Math Web Element"]',
             );
             if (iframe && !nearestLabel) {
                 const srcdoc = iframe.getAttribute('srcdoc');
                 if (srcdoc?.includes('<svg')) {
+                    // First check for block diagram (has rect elements)
+                    if (isBlockDiagram(srcdoc)) {
+                        const blockCount = extractBlockDiagramValue(srcdoc);
+                        if (blockCount !== null) {
+                            this.log('token', i, 'extracted block diagram:', blockCount);
+                            tokens.push({
+                                index: i,
+                                element: token,
+                                rawValue: `${blockCount} blocks`,
+                                numericValue: blockCount,
+                                isBlockDiagram: true,
+                            });
+                            continue;
+                        }
+                    }
+
+                    // Then check for pie chart
                     const fraction = extractPieChartFraction(srcdoc);
                     if (fraction) {
                         this.log('token', i, 'extracted pie chart:', fraction.value);
@@ -256,18 +273,23 @@ export class MatchPairsSolver extends BaseSolver {
         const usedIndices = new Set<number>();
 
         const pieCharts = tokens.filter(t => t.isPieChart);
+        const blockDiagrams = tokens.filter(t => t.isBlockDiagram && !t.isRoundingTarget);
         const roundingTargets = tokens.filter(t => t.isRoundingTarget);
-        const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram);
+        const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget);
 
         // MODE 1: Rounding matching
         if (this.hasNearestRounding && roundingTargets.length > 0) {
             this.matchRounding(tokens, roundingTargets, pairs, usedIndices);
         }
-        // MODE 2: Pie chart matching
+        // MODE 2: Block diagram matching (blocks to numbers with same value)
+        else if (blockDiagrams.length > 0 && numbers.length > 0) {
+            this.matchBlockDiagrams(blockDiagrams, numbers, pairs, usedIndices);
+        }
+        // MODE 3: Pie chart matching
         else if (pieCharts.length > 0 && numbers.length > 0) {
             this.matchPieCharts(pieCharts, numbers, pairs, usedIndices);
         }
-        // MODE 3: Expression matching
+        // MODE 4: Expression matching
         else {
             this.matchExpressions(tokens, pairs, usedIndices);
         }
@@ -303,6 +325,31 @@ export class MatchPairsSolver extends BaseSolver {
                         '→',
                         rounded,
                     );
+                    break;
+                }
+            }
+        }
+    }
+
+    private matchBlockDiagrams(
+        blockDiagrams: IToken[],
+        numbers: IToken[],
+        pairs: { first: IToken; second: IToken }[],
+        usedIndices: Set<number>,
+    ): void {
+        for (const block of blockDiagrams) {
+            if (usedIndices.has(block.index) || block.numericValue === null) continue;
+
+            for (const num of numbers) {
+                if (usedIndices.has(num.index) || num.numericValue === null) {
+                    continue;
+                }
+
+                if (Math.abs(block.numericValue - num.numericValue) < 0.0001) {
+                    pairs.push({ first: block, second: num });
+                    usedIndices.add(block.index);
+                    usedIndices.add(num.index);
+                    this.log('found block diagram pair:', block.rawValue, '=', num.rawValue);
                     break;
                 }
             }
