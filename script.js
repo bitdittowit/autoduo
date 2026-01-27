@@ -1647,6 +1647,28 @@ function solveMathTypeAnswer(challengeContainer, equationContainer, textInput) {
         LOG_WARN('solveMathTypeAnswer: could not parse fraction from expression');
     }
     
+    // Check if this is an inequality with a blank (e.g., "5/5 > ?")
+    const hasInequality = equation.includes('>') || equation.includes('<') ||
+                          equation.includes('\\gt') || equation.includes('\\lt') ||
+                          equation.includes('\\ge') || equation.includes('\\le');
+    const hasBlank = equation.includes('\\duoblank');
+    
+    if (hasInequality && hasBlank) {
+        LOG('solveMathTypeAnswer: detected INEQUALITY with blank type');
+        
+        const inequalityAnswer = solveInequalityWithBlank(equation);
+        if (inequalityAnswer !== null) {
+            LOG('solveMathTypeAnswer: inequality answer =', inequalityAnswer);
+            dynamicInput(textInput, inequalityAnswer);
+            
+            return {
+                type: 'typeInequalityAnswer',
+                equation: equation,
+                answer: inequalityAnswer
+            };
+        }
+    }
+    
     // Standard equation solving (with = and/or \duoblank)
     const answer = solveEquationWithBlank(equation);
     LOG('solveMathTypeAnswer: solved answer =', answer);
@@ -1763,6 +1785,157 @@ function parseFractionExpression(expr) {
     }
     
     return null;
+}
+
+/**
+ * Solve an inequality with a blank (e.g., "5/5 > ?")
+ * Returns a fraction string that satisfies the inequality, or null
+ */
+function solveInequalityWithBlank(equation) {
+    LOG_DEBUG('solveInequalityWithBlank: input', equation);
+    
+    let cleaned = equation;
+    
+    // Remove LaTeX wrappers
+    while (cleaned.includes('\\mathbf{')) {
+        cleaned = extractLatexContent(cleaned, '\\mathbf');
+    }
+    while (cleaned.includes('\\textbf{')) {
+        cleaned = extractLatexContent(cleaned, '\\textbf');
+    }
+    
+    // Detect the comparison operator and normalize
+    let operator = null;
+    let operatorStr = null;
+    
+    if (cleaned.includes('>=') || cleaned.includes('\\ge')) {
+        operator = '>=';
+        operatorStr = cleaned.includes('>=') ? '>=' : '\\ge';
+    } else if (cleaned.includes('<=') || cleaned.includes('\\le')) {
+        operator = '<=';
+        operatorStr = cleaned.includes('<=') ? '<=' : '\\le';
+    } else if (cleaned.includes('>') || cleaned.includes('\\gt')) {
+        operator = '>';
+        operatorStr = cleaned.includes('>') ? '>' : '\\gt';
+    } else if (cleaned.includes('<') || cleaned.includes('\\lt')) {
+        operator = '<';
+        operatorStr = cleaned.includes('<') ? '<' : '\\lt';
+    }
+    
+    if (!operator) {
+        LOG_DEBUG('solveInequalityWithBlank: no operator found');
+        return null;
+    }
+    
+    LOG_DEBUG('solveInequalityWithBlank: operator =', operator);
+    
+    // Split by the operator
+    const parts = cleaned.split(operatorStr);
+    if (parts.length !== 2) {
+        LOG_DEBUG('solveInequalityWithBlank: could not split by operator');
+        return null;
+    }
+    
+    let leftPart = parts[0].trim();
+    let rightPart = parts[1].trim();
+    
+    // Determine which side has the blank
+    const leftHasBlank = leftPart.includes('\\duoblank');
+    const rightHasBlank = rightPart.includes('\\duoblank');
+    
+    if (!leftHasBlank && !rightHasBlank) {
+        LOG_DEBUG('solveInequalityWithBlank: no blank found');
+        return null;
+    }
+    
+    // Get the known value from the non-blank side
+    const knownPart = leftHasBlank ? rightPart : leftPart;
+    
+    // Parse the known value (handle fractions)
+    let knownValue = null;
+    let knownNumerator = null;
+    let knownDenominator = null;
+    
+    // Try to parse \frac{num}{denom}
+    const fracMatch = knownPart.match(/\\frac\{(\d+)\}\{(\d+)\}/);
+    if (fracMatch) {
+        knownNumerator = parseInt(fracMatch[1], 10);
+        knownDenominator = parseInt(fracMatch[2], 10);
+        knownValue = knownNumerator / knownDenominator;
+    } else {
+        // Try simple number
+        const numMatch = knownPart.match(/(\d+)/);
+        if (numMatch) {
+            knownValue = parseFloat(numMatch[1]);
+            knownNumerator = parseInt(numMatch[1], 10);
+            knownDenominator = 1;
+        }
+    }
+    
+    if (knownValue === null) {
+        LOG_DEBUG('solveInequalityWithBlank: could not parse known value from', knownPart);
+        return null;
+    }
+    
+    LOG_DEBUG('solveInequalityWithBlank: known value =', knownValue, '(', knownNumerator, '/', knownDenominator, ')');
+    
+    // Generate an answer that satisfies the inequality
+    // The answer format should be "numerator/denominator" for fractions
+    let answerNum, answerDenom;
+    
+    if (leftHasBlank) {
+        // Blank is on the LEFT: "? op value"
+        // For "? > value": answer must be greater than value
+        // For "? < value": answer must be less than value
+        switch (operator) {
+            case '>':
+            case '>=':
+                // Need something GREATER than knownValue
+                answerNum = knownNumerator + 1;
+                answerDenom = knownDenominator;
+                break;
+            case '<':
+            case '<=':
+                // Need something LESS than knownValue
+                if (knownValue > 0) {
+                    answerNum = Math.max(0, knownNumerator - 1);
+                    answerDenom = knownDenominator;
+                } else {
+                    answerNum = knownNumerator - 1;
+                    answerDenom = knownDenominator;
+                }
+                break;
+        }
+    } else {
+        // Blank is on the RIGHT: "value op ?"
+        // For "value > ?": answer must be less than value
+        // For "value < ?": answer must be greater than value
+        switch (operator) {
+            case '>':
+            case '>=':
+                // Need something LESS than knownValue
+                if (knownValue > 0) {
+                    answerNum = Math.max(0, knownNumerator - 1);
+                    answerDenom = knownDenominator;
+                } else {
+                    answerNum = knownNumerator - 1;
+                    answerDenom = knownDenominator;
+                }
+                break;
+            case '<':
+            case '<=':
+                // Need something GREATER than knownValue
+                answerNum = knownNumerator + 1;
+                answerDenom = knownDenominator;
+                break;
+        }
+    }
+    
+    // Format the answer
+    const answerStr = `${answerNum}/${answerDenom}`;
+    LOG('solveInequalityWithBlank: generated answer =', answerStr);
+    
+    return answerStr;
 }
 
 /**
