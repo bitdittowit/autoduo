@@ -461,16 +461,69 @@ var AutoDuo = (function (exports) {
         return document.querySelector(SELECTORS.BLAME_INCORRECT) !== null;
     }
     /**
-     * Проверяет, находимся ли на домашней странице
+     * Проверяет, находимся ли на домашней странице курса
      */
     function isOnHomePage() {
         const url = window.location.href;
         return url.includes('/learn') && !url.includes('/lesson') && !url.includes('/practice');
     }
+    /**
+     * Проверяет, есть ли доступный следующий урок
+     */
+    function hasNextLesson() {
+        // Look for skill path with START indicator or unlocked lessons
+        const startButton = document.querySelector('[data-test*="skill-path-level"] button:not([disabled])');
+        return startButton !== null;
+    }
+    /**
+     * Кликает на следующий доступный урок
+     * @returns true если урок найден и клик выполнен
+     */
+    function clickNextLesson() {
+        // Find the current lesson with START indicator (the popup)
+        const startPopup = document.querySelector('._36bu_');
+        if (startPopup) {
+            // Find the parent button
+            const button = startPopup.closest('[role="button"]');
+            if (button) {
+                logger.info('clicking START lesson');
+                button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                // After clicking, we need to click the actual start button in the popup
+                setTimeout(() => {
+                    const startBtn = document.querySelector('button[data-test="start-button"], a[href*="/lesson"]');
+                    if (startBtn) {
+                        startBtn.click();
+                    }
+                }, 300);
+                return true;
+            }
+        }
+        // Fallback: find any unlocked skill button and click it
+        const skillButtons = document.querySelectorAll('[data-test*="skill-path-level"] button:not([disabled])');
+        for (const btn of skillButtons) {
+            // Skip completed lessons (they have checkmark icons)
+            const isCompleted = btn.querySelector('svg path[d*="M34.2346"]') !== null;
+            if (!isCompleted) {
+                logger.info('clicking next available lesson');
+                btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                setTimeout(() => {
+                    const startBtn = document.querySelector('button[data-test="start-button"], a[href*="/lesson"]');
+                    if (startBtn) {
+                        startBtn.click();
+                    }
+                }, 300);
+                return true;
+            }
+        }
+        logger.warn('no available lessons found');
+        return false;
+    }
 
     var ChallengeDetector = /*#__PURE__*/Object.freeze({
         __proto__: null,
+        clickNextLesson: clickNextLesson,
         detectChallenge: detectChallenge,
+        hasNextLesson: hasNextLesson,
         isIncorrect: isIncorrect,
         isOnHomePage: isOnHomePage,
         isOnResultScreen: isOnResultScreen
@@ -4120,11 +4173,24 @@ var AutoDuo = (function (exports) {
         async runLoop() {
             while (this.isRunning) {
                 try {
-                    // Check if on result screen
+                    // Check if on result screen (lesson complete)
                     if (isOnResultScreen()) {
-                        logger.info('AutoRunner: lesson complete');
-                        this.stop();
-                        break;
+                        logger.info('AutoRunner: lesson complete, looking for next...');
+                        clickContinueButton();
+                        await delay$1(1000);
+                        continue;
+                    }
+                    // Check if on home page (need to start next lesson)
+                    if (isOnHomePage()) {
+                        logger.info('AutoRunner: on home page, starting next lesson...');
+                        const started = clickNextLesson();
+                        if (!started) {
+                            logger.info('AutoRunner: no more lessons available, course complete!');
+                            this.stop();
+                            break;
+                        }
+                        await delay$1(2000); // Wait for lesson to load
+                        continue;
                     }
                     // Check for incorrect answer
                     if (isIncorrect()) {
@@ -4590,6 +4656,7 @@ var AutoDuo = (function (exports) {
     exports.cleanAnnotationText = cleanAnnotationText;
     exports.cleanLatexForEval = cleanLatexForEval;
     exports.cleanLatexWrappers = cleanLatexWrappers;
+    exports.clickNextLesson = clickNextLesson;
     exports.compareFractions = compareFractions;
     exports.convertLatexFractions = convertLatexFractions;
     exports.convertLatexOperators = convertLatexOperators;
@@ -4611,6 +4678,7 @@ var AutoDuo = (function (exports) {
     exports.getControlPanel = getControlPanel;
     exports.getLogPanel = getLogPanel;
     exports.getSolverRegistry = getSolverRegistry;
+    exports.hasNextLesson = hasNextLesson;
     exports.isBlockDiagram = isBlockDiagram;
     exports.isDigitsOnly = isDigitsOnly;
     exports.isFractionString = isFractionString;

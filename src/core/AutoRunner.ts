@@ -4,7 +4,13 @@
 
 import { logger } from '../utils/logger';
 import { delay, clickContinueButton } from '../dom/interactions';
-import { detectChallenge, isOnResultScreen, isIncorrect } from './ChallengeDetector';
+import {
+    detectChallenge,
+    isOnResultScreen,
+    isIncorrect,
+    isOnHomePage,
+    clickNextLesson,
+} from './ChallengeDetector';
 import { getSolverRegistry } from './SolverRegistry';
 import { CONFIG } from '../config';
 
@@ -75,11 +81,25 @@ export class AutoRunner {
     private async runLoop(): Promise<void> {
         while (this.isRunning) {
             try {
-                // Check if on result screen
+                // Check if on result screen (lesson complete)
                 if (isOnResultScreen()) {
-                    logger.info('AutoRunner: lesson complete');
-                    this.stop();
-                    break;
+                    logger.info('AutoRunner: lesson complete, looking for next...');
+                    clickContinueButton();
+                    await delay(1000);
+                    continue;
+                }
+
+                // Check if on home page (need to start next lesson)
+                if (isOnHomePage()) {
+                    logger.info('AutoRunner: on home page, starting next lesson...');
+                    const started = clickNextLesson();
+                    if (!started) {
+                        logger.info('AutoRunner: no more lessons available, course complete!');
+                        this.stop();
+                        break;
+                    }
+                    await delay(2000); // Wait for lesson to load
+                    continue;
                 }
 
                 // Check for incorrect answer

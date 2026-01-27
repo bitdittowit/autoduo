@@ -85,9 +85,73 @@ export function isIncorrect(): boolean {
 }
 
 /**
- * Проверяет, находимся ли на домашней странице
+ * Проверяет, находимся ли на домашней странице курса
  */
 export function isOnHomePage(): boolean {
     const url = window.location.href;
     return url.includes('/learn') && !url.includes('/lesson') && !url.includes('/practice');
+}
+
+/**
+ * Проверяет, есть ли доступный следующий урок
+ */
+export function hasNextLesson(): boolean {
+    // Look for skill path with START indicator or unlocked lessons
+    const startButton = document.querySelector('[data-test*="skill-path-level"] button:not([disabled])');
+    return startButton !== null;
+}
+
+/**
+ * Кликает на следующий доступный урок
+ * @returns true если урок найден и клик выполнен
+ */
+export function clickNextLesson(): boolean {
+    // Find the current lesson with START indicator (the popup)
+    const startPopup = document.querySelector('._36bu_');
+    if (startPopup) {
+        // Find the parent button
+        const button = startPopup.closest('[role="button"]');
+        if (button) {
+            logger.info('clicking START lesson');
+            button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+            // After clicking, we need to click the actual start button in the popup
+            setTimeout(() => {
+                const startBtn = document.querySelector(
+                    'button[data-test="start-button"], a[href*="/lesson"]',
+                );
+                if (startBtn) {
+                    (startBtn as HTMLElement).click();
+                }
+            }, 300);
+            return true;
+        }
+    }
+
+    // Fallback: find any unlocked skill button and click it
+    const skillButtons = document.querySelectorAll(
+        '[data-test*="skill-path-level"] button:not([disabled])',
+    );
+
+    for (const btn of skillButtons) {
+        // Skip completed lessons (they have checkmark icons)
+        const isCompleted = btn.querySelector('svg path[d*="M34.2346"]') !== null;
+        if (!isCompleted) {
+            logger.info('clicking next available lesson');
+            btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+            setTimeout(() => {
+                const startBtn = document.querySelector(
+                    'button[data-test="start-button"], a[href*="/lesson"]',
+                );
+                if (startBtn) {
+                    (startBtn as HTMLElement).click();
+                }
+            }, 300);
+            return true;
+        }
+    }
+
+    logger.warn('no available lessons found');
+    return false;
 }
