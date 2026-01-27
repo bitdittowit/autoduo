@@ -11,6 +11,9 @@ export { SelectOperatorSolver } from './SelectOperatorSolver';
 export { SelectPieChartSolver } from './SelectPieChartSolver';
 export { PieChartTextInputSolver } from './PieChartTextInputSolver';
 export { EquationBlankSolver } from './EquationBlankSolver';
+export { MatchPairsSolver } from './MatchPairsSolver';
+export { InteractiveSliderSolver } from './InteractiveSliderSolver';
+export { InteractiveSpinnerSolver } from './InteractiveSpinnerSolver';
 
 // Re-export types
 export type { ISolver, ISolverResult, IChallengeContext } from '../types';

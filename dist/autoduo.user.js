@@ -2399,6 +2399,912 @@ var AutoDuo = (function (exports) {
     }
 
     /**
+     * Солвер для заданий "Match the pairs"
+     * Сопоставляет элементы по значениям: дроби, pie charts, округление
+     */
+    class MatchPairsSolver extends BaseSolver {
+        name = 'MatchPairsSolver';
+        canSolve(context) {
+            // Match pairs have tap tokens and usually "Match" in header
+            const hasHeader = this.headerContains(context, 'match', 'pair');
+            const hasTapTokens = (context.choices?.length ?? 0) >= 4;
+            // Check for tap token elements specifically
+            const tapTokens = context.container.querySelectorAll('[data-test="challenge-tap-token"]');
+            return (hasHeader || tapTokens.length >= 4) && hasTapTokens;
+        }
+        solve(context) {
+            this.log('starting');
+            const tapTokens = context.container.querySelectorAll('[data-test="challenge-tap-token"]');
+            if (tapTokens.length < 2) {
+                return this.failure('matchPairs', 'Not enough tap tokens');
+            }
+            // Extract values from all tokens
+            const tokens = this.extractTokens(Array.from(tapTokens));
+            this.log('active tokens:', tokens.length);
+            if (tokens.length < 2) {
+                return this.failure('matchPairs', 'Not enough active tokens');
+            }
+            // Find matching pairs
+            const pairs = this.findPairs(tokens);
+            if (pairs.length === 0) {
+                this.logError('no matching pairs found');
+                return this.failure('matchPairs', 'No matching pairs found');
+            }
+            // Click the first pair
+            const pair = pairs[0];
+            if (!pair) {
+                return this.failure('matchPairs', 'No pair to click');
+            }
+            this.log('clicking pair:', pair.first.rawValue, '↔', pair.second.rawValue);
+            this.click(pair.first.element);
+            // Click second with delay
+            setTimeout(() => {
+                this.click(pair.second.element);
+            }, 100);
+            return this.success({
+                type: 'matchPairs',
+                pairs: pairs.map(p => ({
+                    first: p.first.rawValue,
+                    second: p.second.rawValue,
+                })),
+                clickedPair: {
+                    first: pair.first.rawValue,
+                    second: pair.second.rawValue,
+                },
+            });
+        }
+        extractTokens(tapTokens) {
+            const tokens = [];
+            let hasNearestRounding = false;
+            let roundingBase = 10;
+            for (let i = 0; i < tapTokens.length; i++) {
+                const token = tapTokens[i];
+                if (!token)
+                    continue;
+                // Skip disabled tokens
+                if (token.getAttribute('aria-disabled') === 'true') {
+                    continue;
+                }
+                // Check for "Nearest X" label
+                const nearestLabel = token.querySelector('._27M4R');
+                if (nearestLabel) {
+                    const labelText = nearestLabel.textContent ?? '';
+                    const nearestMatch = labelText.match(/Nearest\s*(\d+)/i);
+                    if (nearestMatch?.[1]) {
+                        hasNearestRounding = true;
+                        roundingBase = parseInt(nearestMatch[1], 10);
+                        const tokenData = this.extractRoundingToken(token, i, roundingBase);
+                        if (tokenData) {
+                            tokens.push(tokenData);
+                            continue;
+                        }
+                    }
+                }
+                // Check for iframe with pie chart or block diagram
+                const iframe = token.querySelector('iframe[title="Math Web Element"]');
+                if (iframe && !nearestLabel) {
+                    const srcdoc = iframe.getAttribute('srcdoc');
+                    if (srcdoc?.includes('<svg')) {
+                        const fraction = extractPieChartFraction(srcdoc);
+                        if (fraction) {
+                            tokens.push({
+                                index: i,
+                                element: token,
+                                rawValue: `${fraction.numerator}/${fraction.denominator} (pie)`,
+                                numericValue: fraction.value,
+                                isPieChart: true,
+                            });
+                            continue;
+                        }
+                    }
+                }
+                // Extract KaTeX value
+                const value = extractKatexValue(token);
+                if (value) {
+                    const evaluated = evaluateMathExpression(value);
+                    const isCompound = this.isCompoundExpression(value);
+                    tokens.push({
+                        index: i,
+                        element: token,
+                        rawValue: value,
+                        numericValue: evaluated,
+                        isExpression: isCompound,
+                        isPieChart: false,
+                    });
+                }
+            }
+            // Store for use in findPairs
+            this.hasNearestRounding = hasNearestRounding;
+            this.roundingBase = roundingBase;
+            return tokens;
+        }
+        hasNearestRounding = false;
+        roundingBase = 10;
+        extractRoundingToken(token, index, roundingBase) {
+            // Check for block diagram first
+            const iframe = token.querySelector('iframe[title="Math Web Element"]');
+            if (iframe) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc) {
+                    const blockCount = extractBlockDiagramValue(srcdoc);
+                    if (blockCount !== null) {
+                        return {
+                            index,
+                            element: token,
+                            rawValue: `${blockCount} blocks`,
+                            numericValue: blockCount,
+                            isBlockDiagram: true,
+                            isRoundingTarget: true,
+                            roundingBase,
+                        };
+                    }
+                }
+            }
+            // Otherwise KaTeX number
+            const value = extractKatexValue(token);
+            if (value) {
+                const evaluated = evaluateMathExpression(value);
+                return {
+                    index,
+                    element: token,
+                    rawValue: value,
+                    numericValue: evaluated,
+                    isBlockDiagram: false,
+                    isRoundingTarget: true,
+                    roundingBase,
+                };
+            }
+            return null;
+        }
+        isCompoundExpression(value) {
+            return (value.includes('+') ||
+                value.includes('*') ||
+                /\)\s*-/.test(value) ||
+                /\d\s*-\s*\(/.test(value));
+        }
+        findPairs(tokens) {
+            const pairs = [];
+            const usedIndices = new Set();
+            const pieCharts = tokens.filter(t => t.isPieChart);
+            const roundingTargets = tokens.filter(t => t.isRoundingTarget);
+            const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram);
+            // MODE 1: Rounding matching
+            if (this.hasNearestRounding && roundingTargets.length > 0) {
+                this.matchRounding(tokens, roundingTargets, pairs, usedIndices);
+            }
+            // MODE 2: Pie chart matching
+            else if (pieCharts.length > 0 && numbers.length > 0) {
+                this.matchPieCharts(pieCharts, numbers, pairs, usedIndices);
+            }
+            // MODE 3: Expression matching
+            else {
+                this.matchExpressions(tokens, pairs, usedIndices);
+            }
+            return pairs;
+        }
+        matchRounding(tokens, roundingTargets, pairs, usedIndices) {
+            const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget);
+            for (const num of numbers) {
+                if (usedIndices.has(num.index) || num.numericValue === null)
+                    continue;
+                const rounded = roundToNearest(num.numericValue, this.roundingBase);
+                for (const target of roundingTargets) {
+                    if (usedIndices.has(target.index))
+                        continue;
+                    if (target.numericValue === rounded) {
+                        pairs.push({ first: num, second: target });
+                        usedIndices.add(num.index);
+                        usedIndices.add(target.index);
+                        this.log('found rounding pair:', num.rawValue, '→', rounded);
+                        break;
+                    }
+                }
+            }
+        }
+        matchPieCharts(pieCharts, numbers, pairs, usedIndices) {
+            for (const pie of pieCharts) {
+                if (pie.numericValue === null)
+                    continue;
+                for (const frac of numbers) {
+                    if (usedIndices.has(frac.index) || frac.numericValue === null) {
+                        continue;
+                    }
+                    if (Math.abs(pie.numericValue - frac.numericValue) < 0.0001) {
+                        pairs.push({ first: pie, second: frac });
+                        usedIndices.add(frac.index);
+                        this.log('found pie chart pair:', pie.rawValue, '=', frac.rawValue);
+                        break;
+                    }
+                }
+            }
+        }
+        matchExpressions(tokens, pairs, usedIndices) {
+            const expressions = tokens.filter(t => t.isExpression && !t.isRoundingTarget);
+            const simpleFractions = tokens.filter(t => !t.isExpression && !t.isRoundingTarget && !t.isPieChart && !t.isBlockDiagram);
+            if (expressions.length > 0 && simpleFractions.length > 0) {
+                for (const expr of expressions) {
+                    if (expr.numericValue === null)
+                        continue;
+                    for (const frac of simpleFractions) {
+                        if (usedIndices.has(frac.index) || frac.numericValue === null) {
+                            continue;
+                        }
+                        if (Math.abs(expr.numericValue - frac.numericValue) < 0.0001) {
+                            pairs.push({ first: expr, second: frac });
+                            usedIndices.add(frac.index);
+                            this.log('found expression pair:', expr.rawValue, '=', frac.rawValue);
+                            break;
+                        }
+                    }
+                }
+            }
+            else {
+                // Fallback: match any tokens with same numeric value
+                this.matchFallback(tokens, pairs, usedIndices);
+            }
+        }
+        matchFallback(tokens, pairs, usedIndices) {
+            const fallbackTokens = tokens.filter(t => !t.isRoundingTarget);
+            for (let i = 0; i < fallbackTokens.length; i++) {
+                const t1 = fallbackTokens[i];
+                if (!t1 || usedIndices.has(t1.index) || t1.numericValue === null) {
+                    continue;
+                }
+                for (let j = i + 1; j < fallbackTokens.length; j++) {
+                    const t2 = fallbackTokens[j];
+                    if (!t2 || usedIndices.has(t2.index) || t2.numericValue === null) {
+                        continue;
+                    }
+                    if (Math.abs(t1.numericValue - t2.numericValue) < 0.0001 &&
+                        t1.rawValue !== t2.rawValue) {
+                        pairs.push({ first: t1, second: t2 });
+                        usedIndices.add(t1.index);
+                        usedIndices.add(t2.index);
+                        this.log('found fallback pair:', t1.rawValue, '=', t2.rawValue);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Солвер для интерактивного слайдера
+     * Работает с NumberLine в iframe
+     */
+    class InteractiveSliderSolver extends BaseSolver {
+        name = 'InteractiveSliderSolver';
+        canSolve(context) {
+            // Check for iframe with NumberLine
+            const allIframes = findAllIframes(context.container);
+            for (const iframe of allIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc?.includes('NumberLine')) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        solve(context) {
+            this.log('starting');
+            const allIframes = findAllIframes(context.container);
+            let targetValue = null;
+            let equation = null;
+            let sliderIframe = null;
+            // Find pie chart + slider combination
+            if (allIframes.length >= 2) {
+                const pieChartIframe = findIframeByContent(allIframes, '<svg');
+                if (pieChartIframe) {
+                    const pieSrcdoc = pieChartIframe.getAttribute('srcdoc');
+                    if (pieSrcdoc) {
+                        const fraction = extractPieChartFraction(pieSrcdoc);
+                        if (fraction && fraction.value !== null) {
+                            targetValue = fraction.value;
+                            equation = `pie chart: ${fraction.numerator}/${fraction.denominator}`;
+                            this.log('found pie chart fraction:', equation);
+                        }
+                    }
+                    // Find the slider iframe
+                    for (const ifrm of allIframes) {
+                        if (ifrm !== pieChartIframe) {
+                            const srcdoc = ifrm.getAttribute('srcdoc');
+                            if (srcdoc?.includes('NumberLine')) {
+                                sliderIframe = ifrm;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            // Try rounding challenge
+            if (targetValue === null) {
+                const result = this.tryRoundingChallenge(context);
+                if (result) {
+                    targetValue = result.value;
+                    equation = result.equation;
+                }
+            }
+            // Try equation with blank
+            if (targetValue === null) {
+                const result = this.tryEquationChallenge(context);
+                if (result) {
+                    targetValue = result.value;
+                    equation = result.equation;
+                }
+            }
+            // Try expression in KaTeX
+            if (targetValue === null) {
+                const result = this.tryKatexExpression(context);
+                if (result) {
+                    targetValue = result.value;
+                    equation = result.equation;
+                }
+            }
+            if (targetValue === null) {
+                this.logError('could not determine target value');
+                return this.failure('interactiveSlider', 'Could not determine target value');
+            }
+            // Find slider iframe if not found yet
+            if (!sliderIframe) {
+                sliderIframe = findIframeByContent(allIframes, 'NumberLine');
+            }
+            if (!sliderIframe) {
+                return this.failure('interactiveSlider', 'No slider iframe found');
+            }
+            // Set the value
+            const success = this.setSliderValue(sliderIframe, targetValue);
+            this.log('target value =', targetValue, ', success =', success);
+            const result = {
+                type: 'interactiveSlider',
+                success: true,
+                answer: targetValue,
+            };
+            if (equation) {
+                result.equation = equation;
+            }
+            return result;
+        }
+        tryRoundingChallenge(context) {
+            const headerText = this.getHeaderText(context);
+            if (!headerText.includes('round') || !headerText.includes('nearest')) {
+                return null;
+            }
+            const baseMatch = headerText.match(/nearest\s*(\d+)/);
+            if (!baseMatch?.[1])
+                return null;
+            const roundingBase = parseInt(baseMatch[1], 10);
+            const annotations = context.container.querySelectorAll('annotation');
+            for (const annotation of annotations) {
+                let text = annotation.textContent?.trim() ?? '';
+                text = text.replace(/\\mathbf\{([^}]+)\}/g, '$1');
+                text = text.replace(/\\textbf\{([^}]+)\}/g, '$1');
+                text = text.replace(/\\htmlClass\{[^}]*\}\{([^}]+)\}/g, '$1');
+                const numberToRound = parseInt(text, 10);
+                if (!isNaN(numberToRound) && numberToRound > 0) {
+                    const rounded = roundToNearest(numberToRound, roundingBase);
+                    return {
+                        value: rounded,
+                        equation: `round(${numberToRound}) to nearest ${roundingBase}`,
+                    };
+                }
+            }
+            return null;
+        }
+        tryEquationChallenge(context) {
+            const annotations = context.container.querySelectorAll('annotation');
+            for (const annotation of annotations) {
+                const text = annotation.textContent;
+                if (!text)
+                    continue;
+                // Equation with blank (duoblank)
+                if (text.includes('\\duoblank')) {
+                    const result = this.solveEquationWithBlank(text);
+                    if (result !== null) {
+                        return { value: result, equation: text };
+                    }
+                }
+                // Simple equation like "2+4=?"
+                if (text.includes('=') && text.includes('?')) {
+                    const match = text.match(/(.+)=\s*\?/);
+                    if (match?.[1]) {
+                        const leftSide = match[1]
+                            .replace(/\\mathbf\{([^}]+)\}/g, '$1')
+                            .replace(/\s+/g, '');
+                        const result = evaluateMathExpression(leftSide);
+                        if (result !== null) {
+                            return { value: result, equation: text };
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+        tryKatexExpression(context) {
+            const katexElements = context.container.querySelectorAll('.katex');
+            for (const katex of katexElements) {
+                const value = extractKatexValue(katex);
+                if (!value)
+                    continue;
+                const cleanValue = value.replace(/\s/g, '');
+                if (/^[\d+\-*/×÷().]+$/.test(cleanValue) &&
+                    (value.includes('+') ||
+                        value.includes('-') ||
+                        value.includes('*') ||
+                        value.includes('/'))) {
+                    const result = evaluateMathExpression(value);
+                    if (result !== null) {
+                        return { value: result, equation: value };
+                    }
+                }
+            }
+            return null;
+        }
+        solveEquationWithBlank(equation) {
+            // Simple equation solver for duoblank
+            // e.g., "3 + \\duoblank{1} = 7" -> 4
+            const cleaned = equation
+                .replace(/\\mathbf\{([^}]+)\}/g, '$1')
+                .replace(/\\duoblank\{\d*\}/g, 'X')
+                .replace(/\\times/g, '*')
+                .replace(/×/g, '*')
+                .replace(/÷/g, '/')
+                .trim();
+            // Parse as "left = right" where one side has X
+            const eqParts = cleaned.split('=');
+            if (eqParts.length !== 2)
+                return null;
+            const left = eqParts[0]?.trim();
+            const right = eqParts[1]?.trim();
+            if (!left || !right)
+                return null;
+            // If X is on left side
+            if (left.includes('X')) {
+                const rightValue = evaluateMathExpression(right);
+                if (rightValue === null)
+                    return null;
+                // Simple cases: X + a = b, a + X = b, X - a = b, etc.
+                if (left === 'X')
+                    return rightValue;
+                const addMatch = left.match(/X\s*\+\s*(\d+)/);
+                if (addMatch?.[1]) {
+                    return rightValue - parseInt(addMatch[1], 10);
+                }
+                const subMatch = left.match(/X\s*-\s*(\d+)/);
+                if (subMatch?.[1]) {
+                    return rightValue + parseInt(subMatch[1], 10);
+                }
+                const prefixAddMatch = left.match(/(\d+)\s*\+\s*X/);
+                if (prefixAddMatch?.[1]) {
+                    return rightValue - parseInt(prefixAddMatch[1], 10);
+                }
+            }
+            // If X is on right side
+            if (right.includes('X')) {
+                const leftValue = evaluateMathExpression(left);
+                if (leftValue === null)
+                    return null;
+                if (right === 'X')
+                    return leftValue;
+            }
+            return null;
+        }
+        setSliderValue(iframe, value) {
+            let success = false;
+            try {
+                const iframeWindow = iframe.contentWindow;
+                if (!iframeWindow)
+                    return false;
+                // Method 1: getOutputVariables
+                if (typeof iframeWindow.getOutputVariables === 'function') {
+                    const vars = iframeWindow.getOutputVariables();
+                    if (vars && typeof vars === 'object') {
+                        vars.value = value;
+                        success = true;
+                        this.log('set value via getOutputVariables');
+                    }
+                }
+                // Method 2: OUTPUT_VARS
+                if (!success && iframeWindow.OUTPUT_VARS) {
+                    iframeWindow.OUTPUT_VARS.value = value;
+                    success = true;
+                    this.log('set value via OUTPUT_VARS');
+                }
+                // Trigger callbacks
+                if (typeof iframeWindow.postOutputVariables === 'function') {
+                    iframeWindow.postOutputVariables();
+                }
+                if (iframeWindow.duo?.onFirstInteraction) {
+                    iframeWindow.duo.onFirstInteraction();
+                }
+                if (iframeWindow.duoDynamic?.onInteraction) {
+                    iframeWindow.duoDynamic.onInteraction();
+                }
+                // Method 3: mathDiagram
+                const diagram = iframeWindow.mathDiagram;
+                if (diagram) {
+                    if (diagram.sliderInstance?.setValue) {
+                        diagram.sliderInstance.setValue(value);
+                        success = true;
+                    }
+                    else if (diagram.slider?.setValue) {
+                        diagram.slider.setValue(value);
+                        success = true;
+                    }
+                    else if (diagram.setValue) {
+                        diagram.setValue(value);
+                        success = true;
+                    }
+                }
+                // Method 4: postMessage fallback
+                iframeWindow.postMessage({ type: 'outputVariables', payload: { value } }, '*');
+            }
+            catch (e) {
+                this.logError('error setting slider value:', e);
+            }
+            return success;
+        }
+    }
+
+    /**
+     * Солвер для интерактивного спиннера (выбор сегментов)
+     * Работает с Spinner в iframe
+     */
+    class InteractiveSpinnerSolver extends BaseSolver {
+        name = 'InteractiveSpinnerSolver';
+        canSolve(context) {
+            const allIframes = findAllIframes(context.container);
+            for (const iframe of allIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc?.includes('segments:')) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        solve(context) {
+            this.log('starting');
+            const allIframes = findAllIframes(context.container);
+            const spinnerIframe = findIframeByContent(allIframes, 'segments:');
+            if (!spinnerIframe) {
+                return this.failure('interactiveSpinner', 'No spinner iframe found');
+            }
+            const srcdoc = spinnerIframe.getAttribute('srcdoc') ?? '';
+            // Get spinner segment count
+            const segmentsMatch = srcdoc.match(/segments:\s*(\d+)/);
+            const spinnerSegments = segmentsMatch?.[1]
+                ? parseInt(segmentsMatch[1], 10)
+                : null;
+            if (!spinnerSegments) {
+                return this.failure('interactiveSpinner', 'Could not determine spinner segments');
+            }
+            this.logDebug('spinner has', spinnerSegments, 'segments');
+            // Try different methods to find the target fraction
+            let numerator = null;
+            let denominator = null;
+            let equation = null;
+            // Method 1: Inequality with blank
+            const inequalityResult = this.tryInequalityWithBlank(context, spinnerSegments);
+            if (inequalityResult) {
+                numerator = inequalityResult.numerator;
+                denominator = inequalityResult.denominator;
+                equation = inequalityResult.equation;
+            }
+            // Method 2: Equation with fractions
+            if (numerator === null) {
+                const equationResult = this.tryEquationWithFractions(context, spinnerSegments);
+                if (equationResult) {
+                    numerator = equationResult.numerator;
+                    denominator = equationResult.denominator;
+                    equation = equationResult.equation;
+                }
+            }
+            // Method 3: Simple fraction
+            if (numerator === null) {
+                const fractionResult = this.trySimpleFraction(context);
+                if (fractionResult) {
+                    numerator = fractionResult.numerator;
+                    denominator = fractionResult.denominator;
+                    equation = fractionResult.equation;
+                }
+            }
+            // Method 4: KaTeX expression
+            if (numerator === null) {
+                const katexResult = this.tryKatexExpression(context, spinnerSegments);
+                if (katexResult) {
+                    numerator = katexResult.numerator;
+                    denominator = katexResult.denominator;
+                    equation = katexResult.equation;
+                }
+            }
+            if (numerator === null || denominator === null) {
+                this.logError('could not extract fraction from challenge');
+                return this.failure('interactiveSpinner', 'Could not extract fraction');
+            }
+            // Adjust numerator if spinner segments don't match denominator
+            if (spinnerSegments !== denominator) {
+                const fractionValue = numerator / denominator;
+                numerator = Math.round(fractionValue * spinnerSegments);
+                denominator = spinnerSegments;
+                this.log('adjusted to', numerator, '/', denominator);
+            }
+            // Validate
+            if (numerator < 0 || numerator > spinnerSegments) {
+                this.logError('invalid numerator', numerator);
+                return this.failure('interactiveSpinner', 'Invalid numerator');
+            }
+            // Set the spinner value
+            const success = this.setSpinnerValue(spinnerIframe, numerator);
+            this.log('select', numerator, 'segments, success =', success);
+            const result = {
+                type: 'interactiveSpinner',
+                success: true,
+                numerator,
+                denominator,
+            };
+            if (equation) {
+                result.equation = equation;
+            }
+            return result;
+        }
+        tryInequalityWithBlank(context, spinnerSegments) {
+            const annotations = context.container.querySelectorAll('annotation');
+            for (const annotation of annotations) {
+                const text = annotation.textContent ?? '';
+                const hasInequality = text.includes('>') ||
+                    text.includes('<') ||
+                    text.includes('\\gt') ||
+                    text.includes('\\lt');
+                const hasBlank = text.includes('\\duoblank');
+                if (!hasInequality || !hasBlank)
+                    continue;
+                // Clean LaTeX wrappers
+                let cleaned = text;
+                while (cleaned.includes('\\mathbf{')) {
+                    cleaned = extractLatexContent(cleaned, '\\mathbf');
+                }
+                // Detect operator
+                let operator = null;
+                let operatorStr = '';
+                if (cleaned.includes('>=') || cleaned.includes('\\ge')) {
+                    operator = '>=';
+                    operatorStr = cleaned.includes('>=') ? '>=' : '\\ge';
+                }
+                else if (cleaned.includes('<=') || cleaned.includes('\\le')) {
+                    operator = '<=';
+                    operatorStr = cleaned.includes('<=') ? '<=' : '\\le';
+                }
+                else if (cleaned.includes('>') || cleaned.includes('\\gt')) {
+                    operator = '>';
+                    operatorStr = cleaned.includes('>') ? '>' : '\\gt';
+                }
+                else if (cleaned.includes('<') || cleaned.includes('\\lt')) {
+                    operator = '<';
+                    operatorStr = cleaned.includes('<') ? '<' : '\\lt';
+                }
+                if (!operator)
+                    continue;
+                const parts = cleaned.split(operatorStr);
+                if (parts.length !== 2)
+                    continue;
+                const leftPart = parts[0]?.trim() ?? '';
+                const rightPart = parts[1]?.trim() ?? '';
+                const leftHasBlank = leftPart.includes('\\duoblank');
+                const knownPart = leftHasBlank ? rightPart : leftPart;
+                // Parse known fraction
+                let knownValue = null;
+                const fracMatch = knownPart.match(/\\frac\{(\d+)\}\{(\d+)\}/);
+                if (fracMatch?.[1] && fracMatch[2]) {
+                    knownValue =
+                        parseInt(fracMatch[1], 10) / parseInt(fracMatch[2], 10);
+                }
+                else {
+                    const numMatch = knownPart.match(/(\d+)/);
+                    if (numMatch?.[1]) {
+                        knownValue = parseFloat(numMatch[1]);
+                    }
+                }
+                if (knownValue === null)
+                    continue;
+                // Find valid numerator based on inequality
+                let targetNumerator = null;
+                if (leftHasBlank) {
+                    // Blank on LEFT
+                    if (operator === '>' || operator === '>=') {
+                        for (let n = 0; n <= spinnerSegments; n++) {
+                            const testValue = n / spinnerSegments;
+                            if (operator === '>='
+                                ? testValue >= knownValue
+                                : testValue > knownValue) {
+                                targetNumerator = n;
+                                break;
+                            }
+                        }
+                    }
+                    else {
+                        for (let n = spinnerSegments; n >= 0; n--) {
+                            const testValue = n / spinnerSegments;
+                            if (operator === '<='
+                                ? testValue <= knownValue
+                                : testValue < knownValue) {
+                                targetNumerator = n;
+                                break;
+                            }
+                        }
+                    }
+                }
+                else {
+                    // Blank on RIGHT
+                    if (operator === '>' || operator === '>=') {
+                        for (let n = spinnerSegments; n >= 0; n--) {
+                            const testValue = n / spinnerSegments;
+                            if (operator === '>='
+                                ? testValue <= knownValue
+                                : testValue < knownValue) {
+                                targetNumerator = n;
+                                break;
+                            }
+                        }
+                    }
+                    else {
+                        for (let n = 0; n <= spinnerSegments; n++) {
+                            const testValue = n / spinnerSegments;
+                            if (operator === '<='
+                                ? testValue >= knownValue
+                                : testValue > knownValue) {
+                                targetNumerator = n;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (targetNumerator !== null) {
+                    return {
+                        numerator: targetNumerator,
+                        denominator: spinnerSegments,
+                        equation: text,
+                    };
+                }
+            }
+            return null;
+        }
+        tryEquationWithFractions(context, spinnerSegments) {
+            const annotations = context.container.querySelectorAll('annotation');
+            for (const annotation of annotations) {
+                const text = annotation.textContent ?? '';
+                if (!text.includes('=') || !text.includes('\\frac'))
+                    continue;
+                let cleanText = text;
+                while (cleanText.includes('\\mathbf{')) {
+                    cleanText = extractLatexContent(cleanText, '\\mathbf');
+                }
+                // Extract left side
+                const leftSide = cleanText.split(/=(?:\\duoblank\{[^}]*\})?/)[0] ?? '';
+                // Convert fractions and evaluate
+                const converted = convertLatexFractions(leftSide);
+                const result = evaluateMathExpression(converted.replace(/\s+/g, ''));
+                if (result !== null) {
+                    const calculatedNumerator = Math.round(result * spinnerSegments);
+                    if (calculatedNumerator >= 0 && calculatedNumerator <= spinnerSegments) {
+                        return {
+                            numerator: calculatedNumerator,
+                            denominator: spinnerSegments,
+                            equation: text,
+                        };
+                    }
+                }
+            }
+            return null;
+        }
+        trySimpleFraction(context) {
+            const annotations = context.container.querySelectorAll('annotation');
+            for (const annotation of annotations) {
+                let text = annotation.textContent ?? '';
+                // Clean wrappers
+                while (text.includes('\\mathbf{')) {
+                    text = extractLatexContent(text, '\\mathbf');
+                }
+                // Try \frac{a}{b}
+                const fracMatch = text.match(/\\frac\{(\d+)\}\{(\d+)\}/);
+                if (fracMatch?.[1] && fracMatch[2]) {
+                    return {
+                        numerator: parseInt(fracMatch[1], 10),
+                        denominator: parseInt(fracMatch[2], 10),
+                        equation: annotation.textContent ?? '',
+                    };
+                }
+                // Try a/b
+                const simpleFracMatch = text.match(/(\d+)\s*\/\s*(\d+)/);
+                if (simpleFracMatch?.[1] && simpleFracMatch[2]) {
+                    return {
+                        numerator: parseInt(simpleFracMatch[1], 10),
+                        denominator: parseInt(simpleFracMatch[2], 10),
+                        equation: annotation.textContent ?? '',
+                    };
+                }
+            }
+            return null;
+        }
+        tryKatexExpression(context, spinnerSegments) {
+            const katexElements = context.container.querySelectorAll('.katex');
+            for (const katex of katexElements) {
+                const value = extractKatexValue(katex);
+                if (!value)
+                    continue;
+                // Check for expression
+                if (value.includes('+') && value.includes('/')) {
+                    const cleanValue = value.replace(/=.*$/, '');
+                    const result = evaluateMathExpression(cleanValue);
+                    if (result !== null) {
+                        const calculatedNumerator = Math.round(result * spinnerSegments);
+                        if (calculatedNumerator >= 0 &&
+                            calculatedNumerator <= spinnerSegments) {
+                            return {
+                                numerator: calculatedNumerator,
+                                denominator: spinnerSegments,
+                                equation: value,
+                            };
+                        }
+                    }
+                }
+                // Try fraction format
+                const fracMatch = value.match(/\((\d+)\/(\d+)\)/);
+                if (fracMatch?.[1] && fracMatch[2]) {
+                    return {
+                        numerator: parseInt(fracMatch[1], 10),
+                        denominator: parseInt(fracMatch[2], 10),
+                        equation: value,
+                    };
+                }
+            }
+            return null;
+        }
+        setSpinnerValue(iframe, numerator) {
+            let success = false;
+            try {
+                const iframeWindow = iframe.contentWindow;
+                if (!iframeWindow)
+                    return false;
+                // Create selected indices array [0, 1, 2, ...]
+                const selectedIndices = [];
+                for (let i = 0; i < numerator; i++) {
+                    selectedIndices.push(i);
+                }
+                // Method 1: getOutputVariables
+                if (typeof iframeWindow.getOutputVariables === 'function') {
+                    const vars = iframeWindow.getOutputVariables();
+                    if (vars && 'selected' in vars) {
+                        vars.selected = selectedIndices;
+                        success = true;
+                        this.log('set selected via getOutputVariables');
+                    }
+                }
+                // Method 2: OUTPUT_VARIABLES
+                if (!success && iframeWindow.OUTPUT_VARIABLES) {
+                    iframeWindow.OUTPUT_VARIABLES.selected = selectedIndices;
+                    success = true;
+                    this.log('set selected via OUTPUT_VARIABLES');
+                }
+                // Trigger callbacks
+                if (typeof iframeWindow.postOutputVariables === 'function') {
+                    iframeWindow.postOutputVariables();
+                }
+                if (iframeWindow.duo?.onFirstInteraction) {
+                    iframeWindow.duo.onFirstInteraction();
+                }
+                if (iframeWindow.duoDynamic?.onInteraction) {
+                    iframeWindow.duoDynamic.onInteraction();
+                }
+                // PostMessage fallback
+                iframeWindow.postMessage({ type: 'outputVariables', payload: { selected: selectedIndices } }, '*');
+            }
+            catch (e) {
+                this.logError('error setting spinner value:', e);
+            }
+            return success;
+        }
+    }
+
+    /**
      * Регистр всех доступных солверов
      */
     /**
@@ -2450,7 +3356,11 @@ var AutoDuo = (function (exports) {
          * Порядок важен - более специфичные солверы должны быть первыми
          */
         registerDefaultSolvers() {
-            // Specific solvers first
+            // Interactive iframe solvers (most specific)
+            this.register(new InteractiveSliderSolver());
+            this.register(new InteractiveSpinnerSolver());
+            this.register(new MatchPairsSolver());
+            // Specific challenge type solvers
             this.register(new RoundToNearestSolver());
             this.register(new SelectEquivalentFractionSolver());
             this.register(new ComparisonChoiceSolver());
@@ -2990,11 +3900,14 @@ var AutoDuo = (function (exports) {
     exports.ComparisonChoiceSolver = ComparisonChoiceSolver;
     exports.ControlPanel = ControlPanel;
     exports.EquationBlankSolver = EquationBlankSolver;
+    exports.InteractiveSliderSolver = InteractiveSliderSolver;
+    exports.InteractiveSpinnerSolver = InteractiveSpinnerSolver;
     exports.LOG = LOG;
     exports.LOG_DEBUG = LOG_DEBUG;
     exports.LOG_ERROR = LOG_ERROR;
     exports.LOG_WARN = LOG_WARN;
     exports.LogPanel = LogPanel;
+    exports.MatchPairsSolver = MatchPairsSolver;
     exports.PieChartTextInputSolver = PieChartTextInputSolver;
     exports.RoundToNearestSolver = RoundToNearestSolver;
     exports.SelectEquivalentFractionSolver = SelectEquivalentFractionSolver;

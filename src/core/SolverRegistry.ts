@@ -14,6 +14,9 @@ import { SelectOperatorSolver } from '../solvers/SelectOperatorSolver';
 import { SelectPieChartSolver } from '../solvers/SelectPieChartSolver';
 import { PieChartTextInputSolver } from '../solvers/PieChartTextInputSolver';
 import { EquationBlankSolver } from '../solvers/EquationBlankSolver';
+import { MatchPairsSolver } from '../solvers/MatchPairsSolver';
+import { InteractiveSliderSolver } from '../solvers/InteractiveSliderSolver';
+import { InteractiveSpinnerSolver } from '../solvers/InteractiveSpinnerSolver';
 
 /**
  * Регистр солверов - выбирает подходящий солвер для задания
@@ -69,7 +72,12 @@ export class SolverRegistry {
      * Порядок важен - более специфичные солверы должны быть первыми
      */
     private registerDefaultSolvers(): void {
-        // Specific solvers first
+        // Interactive iframe solvers (most specific)
+        this.register(new InteractiveSliderSolver());
+        this.register(new InteractiveSpinnerSolver());
+        this.register(new MatchPairsSolver());
+
+        // Specific challenge type solvers
         this.register(new RoundToNearestSolver());
         this.register(new SelectEquivalentFractionSolver());
         this.register(new ComparisonChoiceSolver());
