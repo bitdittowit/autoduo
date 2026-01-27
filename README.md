@@ -10,13 +10,15 @@ Userscript для автоматического решения математи
 |-------------|----------|
 | **Pattern Table** | Таблицы с числовыми паттернами |
 | **Equation with Blank** | Уравнения с пропусками (`\duoblank`) |
+| **Select Equivalent Fraction** | "Show this another way" — выбор эквивалентной дроби |
 | **Interactive Spinner** | Круговые диаграммы для выбора дробей |
-| **Interactive Slider** | Числовые линии со слайдером |
+| **Interactive Slider** | Числовые линии со слайдером (NumberLine) |
 | **Expression Build** | Построение математических выражений |
 | **Match Pairs** | Сопоставление пар |
 | **Pie Chart Input** | Ввод значений для круговых диаграмм |
 | **Multiple Choice** | Вопросы с выбором ответа |
 | **Tap Tokens** | Выбор токенов касанием |
+| **Factor Tree** | Разложение чисел на множители |
 
 ## Установка
 
@@ -80,10 +82,12 @@ script.js
 ├── ControlPanel      # Панель управления
 ├── Challenge Solvers # Решатели для каждого типа заданий
 │   ├── solveMathChallengeBlob
+│   ├── solveMathSelectEquivalentFraction
 │   ├── solveMathInteractiveSpinner
 │   ├── solveMathInteractiveSlider
 │   ├── solveMathExpressionBuild
 │   ├── solveMathMatchPairs
+│   ├── solveFactorTree
 │   └── ...
 └── Main Loop         # Основной цикл автоматизации
 ```
