@@ -7,6 +7,7 @@ export const SELECTORS = {
     MATH_CHALLENGE_BLOB: '[data-test="challenge challenge-mathChallengeBlob"]',
     CHALLENGE_CONTAINER: '[data-test^="challenge challenge-"]',
     CHALLENGE_HEADER: '[data-test="challenge-header"]',
+    PATTERN_TABLE: '[data-test="challenge-patternTable"]',
 
     // Choices
     CHALLENGE_CHOICE: '[data-test="challenge-choice"]',
@@ -18,11 +19,16 @@ export const SELECTORS = {
 
     // Buttons
     PLAYER_NEXT: '[data-test="player-next"]',
+    PLAYER_SKIP: '[data-test="player-skip"]',
     PRACTICE_AGAIN: '[data-test="practice-again-button"]',
 
     // States
     BLAME_INCORRECT: '[data-test="blame blame-incorrect"]',
     SESSION_COMPLETE: '[data-test="session-complete-slide"]',
+
+    // Math elements
+    KATEX: '.katex',
+    ANNOTATION: 'annotation',
 
     // Iframes
     MATH_IFRAME: 'iframe[title="Math Web Element"]',
