@@ -1007,6 +1007,19 @@ function solveMathChallengeBlob() {
             return solveMathSelectEquivalentFraction(challengeContainer, equationContainer, choices);
         }
         
+        // Check if this is a comparison challenge with choices (e.g., "1/4 > ?")
+        // Has comparison operator AND \duoblank AND choices with fractions (not pie charts)
+        const hasComparison = eqText.includes('<') || eqText.includes('>') || 
+                              eqText.includes('\\lt') || eqText.includes('\\gt') ||
+                              eqText.includes('\\le') || eqText.includes('\\ge');
+        const hasBlank = eqText.includes('\\duoblank');
+        const choicesHaveIframes = choices.length > 0 && choices[0].querySelector('iframe');
+        
+        if (hasComparison && hasBlank && choices.length > 0 && !choicesHaveIframes) {
+            LOG('solveMathChallengeBlob: detected COMPARISON CHOICE type (text fraction choices)');
+            return solveMathComparisonChoice(challengeContainer, equationContainer, choices);
+        }
+        
         // Type 2: "Select the answer" - equation with blank AND choices to click
         LOG('solveMathChallengeBlob: detected EQUATION WITH BLANK type');
         return solveMathEquationBlank(challengeContainer, equationContainer);
@@ -1100,6 +1113,205 @@ function solveMathSelectEquivalentFraction(challengeContainer, equationContainer
     return {
         targetFraction: targetNumerator + '/' + targetDenominator,
         targetValue: targetValue,
+        choiceIndex: correctChoiceIndex
+    };
+}
+
+/**
+ * Solve "Comparison Choice" type - comparison with text fraction choices
+ * E.g., "1/4 > ?" with choices "1/5" and "5/4"
+ * Need to find which choice makes the comparison TRUE
+ */
+function solveMathComparisonChoice(challengeContainer, equationContainer, choices) {
+    LOG('solveMathComparisonChoice: starting');
+    
+    // Extract the equation from KaTeX
+    const annotation = equationContainer.querySelector('annotation');
+    if (!annotation) {
+        LOG_ERROR('solveMathComparisonChoice: annotation not found');
+        return null;
+    }
+    
+    const eqText = annotation.textContent;
+    LOG('solveMathComparisonChoice: equation =', eqText);
+    
+    // Detect comparison operator
+    let comparisonOperator = null;
+    if (eqText.includes('<=') || eqText.includes('\\le')) {
+        comparisonOperator = '<=';
+    } else if (eqText.includes('>=') || eqText.includes('\\ge')) {
+        comparisonOperator = '>=';
+    } else if (eqText.includes('<') || eqText.includes('\\lt')) {
+        comparisonOperator = '<';
+    } else if (eqText.includes('>') || eqText.includes('\\gt')) {
+        comparisonOperator = '>';
+    }
+    
+    if (!comparisonOperator) {
+        LOG_ERROR('solveMathComparisonChoice: no comparison operator found');
+        return null;
+    }
+    
+    LOG('solveMathComparisonChoice: operator =', comparisonOperator);
+    
+    // Extract the left side value (the fraction before the operator)
+    // E.g., from "\mathbf{\frac{1}{4}>\duoblank{1}}" extract 1/4
+    let cleanedExpr = eqText;
+    
+    // Remove \mathbf{}, \textbf{} wrappers
+    while (cleanedExpr.includes('\\mathbf{')) {
+        cleanedExpr = extractLatexContent(cleanedExpr, '\\mathbf');
+    }
+    while (cleanedExpr.includes('\\textbf{')) {
+        cleanedExpr = extractLatexContent(cleanedExpr, '\\textbf');
+    }
+    
+    // Split by comparison operator to get left side
+    let leftSide = cleanedExpr;
+    const operators = ['<=', '>=', '\\le', '\\ge', '<', '>', '\\lt', '\\gt'];
+    for (const op of operators) {
+        if (leftSide.includes(op)) {
+            leftSide = leftSide.split(op)[0];
+            break;
+        }
+    }
+    
+    LOG_DEBUG('solveMathComparisonChoice: left side =', leftSide);
+    
+    // Convert \frac{a}{b} to (a/b)
+    while (leftSide.includes('\\frac{')) {
+        const fracMatch = leftSide.match(/\\frac\{/);
+        if (!fracMatch) break;
+        
+        const fracStart = fracMatch.index;
+        let numStart = fracStart + 6;
+        let depth = 1;
+        let numEnd = numStart;
+        while (depth > 0 && numEnd < leftSide.length) {
+            if (leftSide[numEnd] === '{') depth++;
+            else if (leftSide[numEnd] === '}') depth--;
+            numEnd++;
+        }
+        const numerator = leftSide.substring(numStart, numEnd - 1);
+        
+        let denomStart = numEnd + 1;
+        depth = 1;
+        let denomEnd = denomStart;
+        while (depth > 0 && denomEnd < leftSide.length) {
+            if (leftSide[denomEnd] === '{') depth++;
+            else if (leftSide[denomEnd] === '}') depth--;
+            denomEnd++;
+        }
+        const denominator = leftSide.substring(denomStart, denomEnd - 1);
+        
+        leftSide = leftSide.substring(0, fracStart) + '(' + numerator + '/' + denominator + ')' + leftSide.substring(denomEnd);
+    }
+    
+    // Evaluate the left side
+    const leftValue = evaluateMathExpression(leftSide);
+    if (leftValue === null) {
+        LOG_ERROR('solveMathComparisonChoice: could not evaluate left side:', leftSide);
+        return null;
+    }
+    
+    LOG('solveMathComparisonChoice: left value =', leftValue);
+    
+    // Now check each choice
+    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+    let correctChoiceIndex = -1;
+    
+    for (let i = 0; i < choices.length; i++) {
+        const choice = choices[i];
+        const choiceAnnotation = choice.querySelector('annotation');
+        if (!choiceAnnotation) continue;
+        
+        let choiceText = choiceAnnotation.textContent;
+        LOG_DEBUG('solveMathComparisonChoice: choice', i, 'raw =', choiceText);
+        
+        // Remove wrappers
+        while (choiceText.includes('\\mathbf{')) {
+            choiceText = extractLatexContent(choiceText, '\\mathbf');
+        }
+        while (choiceText.includes('\\textbf{')) {
+            choiceText = extractLatexContent(choiceText, '\\textbf');
+        }
+        
+        // Convert fractions
+        while (choiceText.includes('\\frac{')) {
+            const fracMatch = choiceText.match(/\\frac\{/);
+            if (!fracMatch) break;
+            
+            const fracStart = fracMatch.index;
+            let numStart = fracStart + 6;
+            let depth = 1;
+            let numEnd = numStart;
+            while (depth > 0 && numEnd < choiceText.length) {
+                if (choiceText[numEnd] === '{') depth++;
+                else if (choiceText[numEnd] === '}') depth--;
+                numEnd++;
+            }
+            const numerator = choiceText.substring(numStart, numEnd - 1);
+            
+            let denomStart = numEnd + 1;
+            depth = 1;
+            let denomEnd = denomStart;
+            while (depth > 0 && denomEnd < choiceText.length) {
+                if (choiceText[denomEnd] === '{') depth++;
+                else if (choiceText[denomEnd] === '}') depth--;
+                denomEnd++;
+            }
+            const denominator = choiceText.substring(denomStart, denomEnd - 1);
+            
+            choiceText = choiceText.substring(0, fracStart) + '(' + numerator + '/' + denominator + ')' + choiceText.substring(denomEnd);
+        }
+        
+        const choiceValue = evaluateMathExpression(choiceText);
+        if (choiceValue === null) {
+            LOG_DEBUG('solveMathComparisonChoice: could not evaluate choice', i);
+            continue;
+        }
+        
+        LOG_DEBUG('solveMathComparisonChoice: choice', i, '=', choiceValue);
+        
+        // Check if comparison is TRUE
+        let comparisonResult = false;
+        switch (comparisonOperator) {
+            case '<':
+                comparisonResult = leftValue < choiceValue;
+                break;
+            case '>':
+                comparisonResult = leftValue > choiceValue;
+                break;
+            case '<=':
+                comparisonResult = leftValue <= choiceValue;
+                break;
+            case '>=':
+                comparisonResult = leftValue >= choiceValue;
+                break;
+        }
+        
+        LOG('solveMathComparisonChoice: check', leftValue, comparisonOperator, choiceValue, '=', comparisonResult);
+        
+        if (comparisonResult) {
+            correctChoiceIndex = i;
+            LOG('solveMathComparisonChoice: found correct choice', i);
+            break;
+        }
+    }
+    
+    if (correctChoiceIndex === -1) {
+        LOG_ERROR('solveMathComparisonChoice: no choice makes comparison TRUE');
+        return null;
+    }
+    
+    // Click the correct choice
+    LOG('solveMathComparisonChoice: clicking choice', correctChoiceIndex);
+    choices[correctChoiceIndex].dispatchEvent(clickEvent);
+    
+    return {
+        type: 'comparisonChoice',
+        leftValue: leftValue,
+        operator: comparisonOperator,
         choiceIndex: correctChoiceIndex
     };
 }
