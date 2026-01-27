@@ -985,6 +985,28 @@ function solveMathChallengeBlob() {
         LOG('solveMathChallengeBlob: detected TYPE THE ANSWER type (text input)');
         return solveMathTypeAnswer(challengeContainer, equationContainer, textInput);
     } else if (equationContainer && choices.length > 0) {
+        // Check if this is "Select Equivalent Fraction" type ("Show this another way")
+        // This is when we have a simple fraction (no equation) and need to select an equivalent one
+        const eqAnnotation = equationContainer.querySelector('annotation');
+        const eqText = eqAnnotation ? eqAnnotation.textContent : '';
+        
+        // Check header for "Show this another way" or similar
+        const header = challengeContainer.querySelector('[data-test="challenge-header"] annotation');
+        const headerText = header ? header.textContent : '';
+        const isShowAnotherWay = headerText.toLowerCase().includes('show') && 
+                                  headerText.toLowerCase().includes('another') &&
+                                  headerText.toLowerCase().includes('way');
+        
+        // Check if equation is a simple fraction without = or \duoblank
+        const isSimpleFraction = eqText.includes('\\frac') && 
+                                  !eqText.includes('=') && 
+                                  !eqText.includes('\\duoblank');
+        
+        if (isShowAnotherWay && isSimpleFraction) {
+            LOG('solveMathChallengeBlob: detected SELECT EQUIVALENT FRACTION type');
+            return solveMathSelectEquivalentFraction(challengeContainer, equationContainer, choices);
+        }
+        
         // Type 2: "Select the answer" - equation with blank AND choices to click
         LOG('solveMathChallengeBlob: detected EQUATION WITH BLANK type');
         return solveMathEquationBlank(challengeContainer, equationContainer);
@@ -1001,6 +1023,85 @@ function solveMathChallengeBlob() {
         LOG_DEBUG('solveMathChallengeBlob: container HTML:', challengeContainer.innerHTML.substring(0, 500));
         return null;
     }
+}
+
+/**
+ * Solve "Select Equivalent Fraction" type - "Show this another way"
+ * Given a fraction, select the choice that represents an equivalent fraction
+ */
+function solveMathSelectEquivalentFraction(challengeContainer, equationContainer, choices) {
+    LOG('solveMathSelectEquivalentFraction: starting');
+    
+    // Extract the target fraction from equation container
+    const annotation = equationContainer.querySelector('annotation');
+    if (!annotation) {
+        LOG_ERROR('solveMathSelectEquivalentFraction: annotation not found');
+        return null;
+    }
+    
+    const eqText = annotation.textContent;
+    LOG('solveMathSelectEquivalentFraction: target fraction =', eqText);
+    
+    // Parse the fraction - extract numerator and denominator
+    // Handles formats like \mathbf{\frac{8}{8}} or \frac{8}{8}
+    const fracMatch = eqText.match(/\\frac\{(\d+)\}\{(\d+)\}/);
+    if (!fracMatch) {
+        LOG_ERROR('solveMathSelectEquivalentFraction: could not parse fraction from', eqText);
+        return null;
+    }
+    
+    const targetNumerator = parseInt(fracMatch[1], 10);
+    const targetDenominator = parseInt(fracMatch[2], 10);
+    const targetValue = targetNumerator / targetDenominator;
+    
+    LOG('solveMathSelectEquivalentFraction: target =', targetNumerator + '/' + targetDenominator, '=', targetValue);
+    
+    // Find the choice with an equivalent fraction
+    let correctChoiceIndex = -1;
+    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+    
+    for (let i = 0; i < choices.length; i++) {
+        const choice = choices[i];
+        const choiceAnnotation = choice.querySelector('annotation');
+        if (!choiceAnnotation) continue;
+        
+        const choiceText = choiceAnnotation.textContent;
+        LOG_DEBUG('solveMathSelectEquivalentFraction: choice', i, '=', choiceText);
+        
+        // Parse the choice fraction
+        const choiceFracMatch = choiceText.match(/\\frac\{(\d+)\}\{(\d+)\}/);
+        if (choiceFracMatch) {
+            const choiceNumerator = parseInt(choiceFracMatch[1], 10);
+            const choiceDenominator = parseInt(choiceFracMatch[2], 10);
+            const choiceValue = choiceNumerator / choiceDenominator;
+            
+            LOG_DEBUG('solveMathSelectEquivalentFraction: choice', i, '=', 
+                      choiceNumerator + '/' + choiceDenominator, '=', choiceValue);
+            
+            // Check if values are equal (handle floating point comparison)
+            if (Math.abs(choiceValue - targetValue) < 0.0001) {
+                correctChoiceIndex = i;
+                LOG('solveMathSelectEquivalentFraction: found equivalent fraction at choice', i,
+                    ':', choiceNumerator + '/' + choiceDenominator);
+                break;
+            }
+        }
+    }
+    
+    if (correctChoiceIndex === -1) {
+        LOG_ERROR('solveMathSelectEquivalentFraction: no equivalent fraction found');
+        return null;
+    }
+    
+    // Click the correct choice
+    LOG('solveMathSelectEquivalentFraction: clicking choice', correctChoiceIndex);
+    choices[correctChoiceIndex].dispatchEvent(clickEvent);
+    
+    return {
+        targetFraction: targetNumerator + '/' + targetDenominator,
+        targetValue: targetValue,
+        choiceIndex: correctChoiceIndex
+    };
 }
 
 /**
