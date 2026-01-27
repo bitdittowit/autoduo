@@ -10,6 +10,7 @@ Userscript для автоматического решения математи
 |-------------|----------|
 | **Pattern Table** | Таблицы с числовыми паттернами |
 | **Equation with Blank** | Уравнения с пропусками (`\duoblank`) |
+| **Comparison Choice** | Сравнения с выбором дроби (`1/4 > ?` → выбрать `1/5`) |
 | **Select Equivalent Fraction** | "Show this another way" — выбор эквивалентной дроби |
 | **Interactive Spinner** | Круговые диаграммы для выбора дробей |
 | **Interactive Slider** | Числовые линии со слайдером (NumberLine) |
@@ -82,6 +83,7 @@ script.js
 ├── ControlPanel      # Панель управления
 ├── Challenge Solvers # Решатели для каждого типа заданий
 │   ├── solveMathChallengeBlob
+│   ├── solveMathComparisonChoice
 │   ├── solveMathSelectEquivalentFraction
 │   ├── solveMathInteractiveSpinner
 │   ├── solveMathInteractiveSlider
