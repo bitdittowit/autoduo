@@ -2834,10 +2834,10 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
     const usedIndices = new Set();
     
     // MODE 1: "Nearest X" matching - rounding targets with source numbers
-    if (hasNearestRounding && roundingTargets.length > 0 && sourceNumbers.length > 0) {
+    if (hasNearestRounding && roundingTargets.length > 0 && numbers.length > 0) {
         LOG('solveMathMatchPairs: using Nearest', roundingBase, 'matching mode');
         
-        for (const num of sourceNumbers) {
+        for (const num of numbers) {
             if (usedIndices.has(num.index)) continue;
             
             // Round to nearest X (use roundingBase from the target tokens)
@@ -2877,8 +2877,9 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
         }
     } else {
         // Match compound expressions with simple fractions by numeric value
-        const expressions = tokens.filter(t => t.isExpression);
-        const simpleFractions = tokens.filter(t => !t.isExpression);
+        // Exclude rounding targets to prevent cross-mode matching errors
+        const expressions = tokens.filter(t => t.isExpression && !t.isRoundingTarget);
+        const simpleFractions = tokens.filter(t => !t.isExpression && !t.isRoundingTarget && !t.isPieChart && !t.isBlockDiagram);
         
         LOG_DEBUG('solveMathMatchPairs: compound expressions:', expressions.length, ', simple fractions:', simpleFractions.length);
         
@@ -2899,14 +2900,16 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
             }
         } else {
             // Fallback: try to match any tokens with same numeric value but different raw values
+            // Filter out rounding targets to prevent cross-mode matching
+            const fallbackTokens = tokens.filter(t => !t.isRoundingTarget);
             LOG_DEBUG('solveMathMatchPairs: fallback mode - matching by numeric value');
-            for (let i = 0; i < tokens.length; i++) {
-                if (usedIndices.has(tokens[i].index)) continue;
-                for (let j = i + 1; j < tokens.length; j++) {
-                    if (usedIndices.has(tokens[j].index)) continue;
+            for (let i = 0; i < fallbackTokens.length; i++) {
+                if (usedIndices.has(fallbackTokens[i].index)) continue;
+                for (let j = i + 1; j < fallbackTokens.length; j++) {
+                    if (usedIndices.has(fallbackTokens[j].index)) continue;
                     
-                    const t1 = tokens[i];
-                    const t2 = tokens[j];
+                    const t1 = fallbackTokens[i];
+                    const t2 = fallbackTokens[j];
                     
                     // Match if same numeric value but different raw representation
                     if (t1.numericValue !== null && t2.numericValue !== null &&
