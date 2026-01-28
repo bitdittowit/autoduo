@@ -135,29 +135,54 @@ export class FactorTreeSolver extends BaseSolver {
 
     private findBlanks(tree: ITreeNode): IBlankInfo[] {
         const blanks: IBlankInfo[] = [];
+        const nodeMap = new Map<number, ITreeNode>();
+        const blankExpectedValues = new Map<number, number>();
 
-        const traverse = (node: ITreeNode | null | undefined, treeIndex: number): void => {
+        // Helper to get effective value (actual or calculated expected value)
+        const getEffectiveValue = (
+            node: ITreeNode | null | undefined,
+            treeIndex: number,
+        ): number | null => {
+            if (!node) return null;
+            if (node.value !== null) {
+                return typeof node.value === 'number' ? node.value : parseFloat(String(node.value));
+            }
+            return blankExpectedValues.get(treeIndex) ?? null;
+        };
+
+        // Post-order traversal: visit children first, then parent
+        const traverseTree = (
+            node: ITreeNode | null | undefined,
+            treeIndex: number,
+            parentNode: ITreeNode | null = null,
+        ): void => {
             if (!node) return;
 
-            // If this node is a blank, calculate expected value
+            nodeMap.set(treeIndex, node);
+
+            // First, recursively traverse children (post-order)
+            if (node.left) {
+                traverseTree(node.left, treeIndex * 2, node);
+            }
+            if (node.right) {
+                traverseTree(node.right, treeIndex * 2 + 1, node);
+            }
+
+            // Now process this node (after children have been processed)
             if (node.value === null) {
                 let expectedValue: number | null = null;
 
-                const leftValue =
-                    node.left?.value !== null && node.left?.value !== undefined
-                        ? node.left.value
-                        : null;
-                const rightValue =
-                    node.right?.value !== null && node.right?.value !== undefined
-                        ? node.right.value
-                        : null;
+                // Case 1: Calculate from children (parent = left * right)
+                const leftValue = getEffectiveValue(node.left, treeIndex * 2);
+                const rightValue = getEffectiveValue(node.right, treeIndex * 2 + 1);
 
                 if (leftValue !== null && rightValue !== null) {
                     expectedValue = leftValue * rightValue;
+                    blankExpectedValues.set(treeIndex, expectedValue);
                     this.logDebug(
                         'blank at index',
                         treeIndex,
-                        'expected =',
+                        'expected value =',
                         leftValue,
                         '*',
                         rightValue,
@@ -165,17 +190,135 @@ export class FactorTreeSolver extends BaseSolver {
                         expectedValue,
                     );
                 }
+                // Case 2: Calculate from parent and sibling (child = parent / sibling)
+                else if (parentNode) {
+                    const parentTreeIndex = Math.floor(treeIndex / 2);
+                    const parentValue = getEffectiveValue(parentNode, parentTreeIndex);
+
+                    if (parentValue !== null) {
+                        let siblingValue: number | null = null;
+                        if (treeIndex % 2 === 0) {
+                            // Even index = left child, check right sibling
+                            siblingValue = getEffectiveValue(parentNode.right, treeIndex + 1);
+                        } else {
+                            // Odd index = right child, check left sibling
+                            siblingValue = getEffectiveValue(parentNode.left, treeIndex - 1);
+                        }
+
+                        if (
+                            siblingValue !== null &&
+                            siblingValue !== 0 &&
+                            parentValue % siblingValue === 0
+                        ) {
+                            expectedValue = parentValue / siblingValue;
+                            blankExpectedValues.set(treeIndex, expectedValue);
+                            this.logDebug(
+                                'blank at index',
+                                treeIndex,
+                                'expected value =',
+                                parentValue,
+                                '/',
+                                siblingValue,
+                                '=',
+                                expectedValue,
+                            );
+                        }
+                    }
+                }
 
                 blanks.push({ treeIndex, expectedValue });
             }
-
-            // Recursively traverse children
-            traverse(node.left, treeIndex * 2);
-            traverse(node.right, treeIndex * 2 + 1);
         };
 
-        // Start from root at index 1
-        traverse(tree, 1);
+        // Start traversal from root at index 1
+        traverseTree(tree, 1);
+
+        // Iterative refinement for blanks that couldn't be calculated
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const blank of blanks) {
+                if (blank.expectedValue === null) {
+                    const node = nodeMap.get(blank.treeIndex);
+                    if (!node) continue;
+
+                    // Try to calculate from children
+                    const leftValue = getEffectiveValue(node.left, blank.treeIndex * 2);
+                    const rightValue = getEffectiveValue(node.right, blank.treeIndex * 2 + 1);
+
+                    if (leftValue !== null && rightValue !== null) {
+                        const newExpectedValue = leftValue * rightValue;
+                        blank.expectedValue = newExpectedValue;
+                        blankExpectedValues.set(blank.treeIndex, newExpectedValue);
+                        changed = true;
+                        this.logDebug(
+                            'blank at index',
+                            blank.treeIndex,
+                            'expected value (refined from children) =',
+                            leftValue,
+                            '*',
+                            rightValue,
+                            '=',
+                            newExpectedValue,
+                        );
+                    } else {
+                        // Try to calculate from parent and sibling
+                        const parentTreeIndex = Math.floor(blank.treeIndex / 2);
+                        if (parentTreeIndex >= 1) {
+                            const parentNode = nodeMap.get(parentTreeIndex);
+                            if (parentNode) {
+                                const parentValue = getEffectiveValue(parentNode, parentTreeIndex);
+
+                                if (parentValue !== null) {
+                                    let siblingValue: number | null = null;
+                                    if (blank.treeIndex % 2 === 0) {
+                                        siblingValue = getEffectiveValue(
+                                            parentNode.right,
+                                            blank.treeIndex + 1,
+                                        );
+                                    } else {
+                                        siblingValue = getEffectiveValue(
+                                            parentNode.left,
+                                            blank.treeIndex - 1,
+                                        );
+                                    }
+
+                                    if (
+                                        siblingValue !== null &&
+                                        siblingValue !== 0 &&
+                                        parentValue % siblingValue === 0
+                                    ) {
+                                        const newExpectedValue = parentValue / siblingValue;
+                                        blank.expectedValue = newExpectedValue;
+                                        blankExpectedValues.set(blank.treeIndex, newExpectedValue);
+                                        changed = true;
+                                        this.logDebug(
+                                            'blank at index',
+                                            blank.treeIndex,
+                                            'expected value (refined from parent) =',
+                                            parentValue,
+                                            '/',
+                                            siblingValue,
+                                            '=',
+                                            newExpectedValue,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        this.logDebug(
+            'found',
+            blanks.length,
+            'blank(s):',
+            JSON.stringify(
+                blanks.map(b => ({ treeIndex: b.treeIndex, expectedValue: b.expectedValue })),
+            ),
+        );
 
         return blanks;
     }
