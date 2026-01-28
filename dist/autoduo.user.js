@@ -3212,9 +3212,22 @@ var AutoDuo = (function (exports) {
                 }
                 // Check for NumberLine
                 if (srcdoc.includes('NumberLine')) {
-                    // Check if this is an ExpressionBuild component
+                    // Check if this is a real NumberLine slider vs embedded in ExpressionBuild
+                    // Real NumberLine sliders have these indicators:
+                    // - disableSnapping: true (for continuous sliders like "Get as close as you can")
+                    // - fillToValue: true (for discrete fill sliders)
+                    // - density: "TWO_PRIMARY" or similar (slider configuration)
+                    const hasSliderConfig = srcdoc.includes('disableSnapping') ||
+                        srcdoc.includes('fillToValue') ||
+                        srcdoc.includes('TWO_PRIMARY') ||
+                        srcdoc.includes('SEVEN_PRIMARY');
                     const isExpressionBuild = srcdoc.includes('exprBuild') || srcdoc.includes('ExpressionBuild');
-                    if (isExpressionBuild) {
+                    // If it has slider config, it's a real NumberLine regardless of ExpressionBuild text
+                    if (hasSliderConfig) {
+                        hasNumberLine = true;
+                        this.log('found NumberLine iframe (has slider config)');
+                    }
+                    else if (isExpressionBuild) {
                         // For "Show this another way" challenges with block diagram,
                         // NumberLine can be in ExpressionBuild iframe, but it's still a slider challenge
                         if (isShowAnotherWay) {
@@ -3222,7 +3235,7 @@ var AutoDuo = (function (exports) {
                             hasNumberLineInExpressionBuild = true;
                         }
                         else {
-                            this.log('skipping ExpressionBuild NumberLine (not show another way)');
+                            this.log('skipping ExpressionBuild NumberLine (no slider config, not show another way)');
                             continue;
                         }
                     }
