@@ -3885,15 +3885,22 @@ var AutoDuo = (function (exports) {
         canSolve(context) {
             const allIframes = findAllIframes(context.container);
             // Check for ExpressionBuild iframe
-            let hasExpressionBuildIframe = false;
+            let expressionBuildIframe = null;
             for (const iframe of allIframes) {
                 const srcdoc = iframe.getAttribute('srcdoc');
                 if (srcdoc?.includes('exprBuild') || srcdoc?.includes('ExpressionBuild')) {
-                    hasExpressionBuildIframe = true;
+                    // IMPORTANT: Exclude NumberLine iframes even if they contain "ExpressionBuild" text
+                    // NumberLine sliders have fillToValue, StandaloneSlider, or slider configuration
+                    if (srcdoc.includes('NumberLine') &&
+                        (srcdoc.includes('fillToValue') || srcdoc.includes('StandaloneSlider'))) {
+                        this.log('skipping NumberLine iframe (not ExpressionBuild)');
+                        continue;
+                    }
+                    expressionBuildIframe = iframe;
                     break;
                 }
             }
-            if (!hasExpressionBuildIframe) {
+            if (!expressionBuildIframe) {
                 return false;
             }
             // Additional check: ExpressionBuild tasks have equations with \duoblank
@@ -5066,10 +5073,10 @@ var AutoDuo = (function (exports) {
          */
         registerDefaultSolvers() {
             // Interactive iframe solvers (most specific)
-            // Note: ExpressionBuildSolver before InteractiveSliderSolver
-            // because ExpressionBuild iframes may also contain NumberLine
-            this.register(new ExpressionBuildSolver());
+            // Note: InteractiveSliderSolver must be BEFORE ExpressionBuildSolver
+            // because NumberLine sliders may contain "ExpressionBuild" in their iframe code
             this.register(new InteractiveSliderSolver());
+            this.register(new ExpressionBuildSolver());
             this.register(new InteractiveSpinnerSolver());
             this.register(new FactorTreeSolver());
             this.register(new MatchPairsSolver());

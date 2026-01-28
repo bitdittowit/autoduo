@@ -37,16 +37,25 @@ export class ExpressionBuildSolver extends BaseSolver {
         const allIframes = findAllIframes(context.container);
 
         // Check for ExpressionBuild iframe
-        let hasExpressionBuildIframe = false;
+        let expressionBuildIframe: HTMLIFrameElement | null = null;
         for (const iframe of allIframes) {
             const srcdoc = iframe.getAttribute('srcdoc');
             if (srcdoc?.includes('exprBuild') || srcdoc?.includes('ExpressionBuild')) {
-                hasExpressionBuildIframe = true;
+                // IMPORTANT: Exclude NumberLine iframes even if they contain "ExpressionBuild" text
+                // NumberLine sliders have fillToValue, StandaloneSlider, or slider configuration
+                if (
+                    srcdoc.includes('NumberLine') &&
+                    (srcdoc.includes('fillToValue') || srcdoc.includes('StandaloneSlider'))
+                ) {
+                    this.log('skipping NumberLine iframe (not ExpressionBuild)');
+                    continue;
+                }
+                expressionBuildIframe = iframe;
                 break;
             }
         }
 
-        if (!hasExpressionBuildIframe) {
+        if (!expressionBuildIframe) {
             return false;
         }
 

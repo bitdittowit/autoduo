@@ -79,10 +79,10 @@ export class SolverRegistry {
      */
     private registerDefaultSolvers(): void {
         // Interactive iframe solvers (most specific)
-        // Note: ExpressionBuildSolver before InteractiveSliderSolver
-        // because ExpressionBuild iframes may also contain NumberLine
-        this.register(new ExpressionBuildSolver());
+        // Note: InteractiveSliderSolver must be BEFORE ExpressionBuildSolver
+        // because NumberLine sliders may contain "ExpressionBuild" in their iframe code
         this.register(new InteractiveSliderSolver());
+        this.register(new ExpressionBuildSolver());
         this.register(new InteractiveSpinnerSolver());
         this.register(new FactorTreeSolver());
         this.register(new MatchPairsSolver());
