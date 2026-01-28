@@ -7,7 +7,8 @@
 
 import { BaseSolver } from './BaseSolver';
 import type { IChallengeContext, ISolverResult } from '../types';
-import { extractPieChartFraction } from '../parsers/PieChartParser';
+import { extractPieChartFraction, isPieChart } from '../parsers/PieChartParser';
+import { isBlockDiagram } from '../parsers/BlockDiagramParser';
 import { cleanLatexWrappers, convertLatexFractions } from '../parsers/latex';
 import { evaluateMathExpression } from '../math/expressions';
 
@@ -26,12 +27,37 @@ export class SelectPieChartSolver extends BaseSolver {
     canSolve(context: IChallengeContext): boolean {
         if (!context.choices?.length) return false;
 
-        // Check if choices contain pie chart iframes
+        // Exclude "Show this another way" challenges with block diagrams
+        // These should be handled by BlockDiagramChoiceSolver
+        const headerMatches = this.headerContains(context, 'show', 'another', 'way');
+        if (headerMatches) {
+            // Check if main challenge has a block diagram
+            const mainIframe = context.container.querySelector<HTMLIFrameElement>(
+                'iframe[title="Math Web Element"]',
+            );
+            if (mainIframe) {
+                const srcdoc = mainIframe.getAttribute('srcdoc');
+                if (srcdoc && isBlockDiagram(srcdoc)) {
+                    // This is a block diagram choice challenge, not a pie chart challenge
+                    return false;
+                }
+            }
+        }
+
+        // Check if choices contain pie chart iframes (not block diagrams)
         const hasPieChartChoices = context.choices.some(choice => {
             const iframe = choice?.querySelector('iframe[title="Math Web Element"]');
             if (!iframe) return false;
             const srcdoc = iframe.getAttribute('srcdoc');
-            return srcdoc?.includes('<circle') || srcdoc?.includes('fill="#');
+            if (!srcdoc) return false;
+
+            // Explicitly exclude block diagrams
+            if (isBlockDiagram(srcdoc)) {
+                return false;
+            }
+
+            // Check if it's actually a pie chart
+            return isPieChart(srcdoc);
         });
 
         return hasPieChartChoices;

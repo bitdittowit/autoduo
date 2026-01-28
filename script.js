@@ -517,6 +517,14 @@ function extractKatexValue(element) {
             raw = extractLatexContent(raw, '\\mbox');
         }
         
+        // Convert LaTeX parentheses to standard parentheses
+        raw = raw.replace(/\\left\(/g, '(');    // \left( -> (
+        raw = raw.replace(/\\right\)/g, ')');   // \right) -> )
+        raw = raw.replace(/\\left\[/g, '[');    // \left[ -> [
+        raw = raw.replace(/\\right\]/g, ']');    // \right] -> ]
+        raw = raw.replace(/\\left\{/g, '{');    // \left{ -> {
+        raw = raw.replace(/\\right\}/g, '}');   // \right} -> }
+        
         // Convert LaTeX math operators to standard operators
         raw = raw.replace(/\\cdot/g, '*');      // \cdot -> * (multiplication)
         raw = raw.replace(/\\times/g, '*');     // \times -> * (multiplication)
@@ -586,28 +594,70 @@ function evaluateMathExpression(expr) {
     
     LOG_DEBUG('evaluateMathExpression: input', expr);
     
-    // Clean the expression
     let cleaned = expr.toString()
         .replace(/\s+/g, '')        // Remove whitespace
+        .replace(/\\left\(/g, '(')  // Replace LaTeX \left( with (
+        .replace(/\\right\)/g, ')') // Replace LaTeX \right) with )
+        .replace(/\\left\[/g, '[')  // Replace LaTeX \left[ with [
+        .replace(/\\right\]/g, ']') // Replace LaTeX \right] with ]
+        .replace(/\\left\{/g, '{')  // Replace LaTeX \left{ with {
+        .replace(/\\right\}/g, '}') // Replace LaTeX \right} with }
         .replace(/\\cdot/g, '*')    // Replace LaTeX multiplication (\cdot)
         .replace(/\\times/g, '*')   // Replace LaTeX multiplication (\times)
         .replace(/\\div/g, '/')     // Replace LaTeX division (\div)
         .replace(/×/g, '*')         // Replace multiplication sign (unicode)
         .replace(/÷/g, '/')         // Replace division sign (unicode)
         .replace(/−/g, '-')         // Replace minus sign (unicode)
-        .replace(/⋅/g, '*')         // Replace middle dot (unicode cdot)
-        .replace(/[^\d+\-*/().]/g, ''); // Keep only valid math chars
+        .replace(/⋅/g, '*');         // Replace middle dot (unicode cdot)
+    
+    // Handle LaTeX exponentiation notation BEFORE removing braces
+    // Convert {base}^{exponent} to base**exponent
+    // First, handle {base}^{exponent} format (most common in LaTeX)
+    cleaned = cleaned.replace(/\{([^}]+)\}\^\{([^}]+)\}/g, (match, base, exp) => {
+        // Remove any remaining LaTeX formatting from base and exponent
+        const cleanBase = base.replace(/[^\d]/g, '');
+        const cleanExp = exp.replace(/[^\d]/g, '');
+        return `(${cleanBase})**(${cleanExp})`;
+    });
+    
+    // Handle base^{exponent} format (without braces around base)
+    cleaned = cleaned.replace(/(\d+)\^\{([^}]+)\}/g, (match, base, exp) => {
+        const cleanExp = exp.replace(/[^\d]/g, '');
+        return `(${base})**(${cleanExp})`;
+    });
+    
+    // Handle {base}^exponent format (without braces around exponent)
+    cleaned = cleaned.replace(/\{([^}]+)\}\^(\d+)/g, (match, base, exp) => {
+        const cleanBase = base.replace(/[^\d]/g, '');
+        return `(${cleanBase})**(${exp})`;
+    });
+    
+    // Handle simple base^exponent format
+    cleaned = cleaned.replace(/(\d+)\^(\d+)/g, '($1)**($2)');
+    
+    // Remove remaining braces (they might be from LaTeX formatting that wasn't exponentiation)
+    // But be careful not to remove braces that are part of ** expressions
+    cleaned = cleaned.replace(/\{/g, '').replace(/\}/g, '');
+    
+    // Now remove any remaining non-math characters except those needed for exponentiation
+    // Keep: digits, +, -, *, /, (, ), ., and ** (exponentiation)
+    // Note: ** is two * characters, both will be preserved since * is in the allowed list
+    cleaned = cleaned.replace(/[^\d+\-*/().]/g, '');
     
     LOG_DEBUG('evaluateMathExpression: cleaned', cleaned);
     
-    // Validate - only allow safe characters
-    if (!/^[\d+\-*/().]+$/.test(cleaned)) {
+    // Validate - allow digits, operators, parentheses, and ** for exponentiation
+    // Remove ** temporarily for validation since it's two characters
+    const cleanedForValidation = cleaned.replace(/\*\*/g, '');
+    if (!/^[\d+\-*/().]+$/.test(cleanedForValidation)) {
         LOG_WARN('evaluateMathExpression: invalid expression after cleaning', cleaned);
         return null;
     }
     
     try {
         // Using Function constructor for safer eval
+        // Replace ** with Math.pow() for compatibility with older JS if needed
+        // But ** should work in modern JS environments
         const result = new Function('return ' + cleaned)();
         LOG_DEBUG('evaluateMathExpression: result', result);
         return result;
@@ -628,9 +678,19 @@ function solveEquationWithBlank(equation) {
     let cleaned = equation
         .replace(/\\duoblank\{[^}]*\}/g, 'X')  // Replace \duoblank{...} with X
         .replace(/\s+/g, '')                    // Remove whitespace
+        .replace(/\\left\(/g, '(')              // Replace LaTeX \left( with (
+        .replace(/\\right\)/g, ')')             // Replace LaTeX \right) with )
+        .replace(/\\left\[/g, '[')              // Replace LaTeX \left[ with [
+        .replace(/\\right\]/g, ']')             // Replace LaTeX \right] with ]
+        .replace(/\\left\{/g, '{')              // Replace LaTeX \left{ with {
+        .replace(/\\right\}/g, '}')             // Replace LaTeX \right} with }
+        .replace(/\\cdot/g, '*')                // Replace LaTeX \cdot with *
+        .replace(/\\times/g, '*')               // Replace LaTeX \times with *
+        .replace(/\\div/g, '/')                 // Replace LaTeX \div with /
         .replace(/×/g, '*')                     // Replace multiplication sign
         .replace(/÷/g, '/')                     // Replace division sign
-        .replace(/−/g, '-');                    // Replace minus sign
+        .replace(/−/g, '-')                     // Replace minus sign
+        .replace(/⋅/g, '*');                    // Replace middle dot (unicode cdot)
     
     // Handle \mathbf{} with nested braces using extractLatexContent
     while (cleaned.includes('\\mathbf{')) {
@@ -714,9 +774,110 @@ function solveEquationWithBlank(equation) {
         }
     }
     
+    // Try algebraic solving for simple cases where X is multiplied or divided by a number
+    // Cases: X*N = value, N*X = value, X/N = value, N/X = value
+    // Also handle: (X)*N, (N)*X, etc.
+    
+    // Pattern: X*number or number*X or (X)*number or number*(X)
+    const xTimesPattern = /\(?X\)?\s*\*\s*([0-9.]+)/;
+    const timesXPattern = /([0-9.]+)\s*\*\s*\(?X\)?/;
+    const xDivPattern = /\(?X\)?\s*\/\s*([0-9.]+)/;
+    const divXPattern = /([0-9.]+)\s*\/\s*\(?X\)?/;
+    
+    if (xOnLeft && !xOnRight) {
+        // X is on left side, try to solve algebraically
+        const xTimesMatch = left.match(xTimesPattern);
+        const timesXMatch = left.match(timesXPattern);
+        const xDivMatch = left.match(xDivPattern);
+        const divXMatch = left.match(divXPattern);
+        
+        const rightVal = evaluateMathExpression(right);
+        
+        if (rightVal !== null) {
+            if (xTimesMatch) {
+                // X * N = value → X = value / N
+                const multiplier = parseFloat(xTimesMatch[1]);
+                if (!isNaN(multiplier) && multiplier !== 0) {
+                    const result = rightVal / multiplier;
+                    LOG_DEBUG('solveEquationWithBlank: solved X*', multiplier, '=', rightVal, '→ X =', result);
+                    return result;
+                }
+            } else if (timesXMatch) {
+                // N * X = value → X = value / N
+                const multiplier = parseFloat(timesXMatch[1]);
+                if (!isNaN(multiplier) && multiplier !== 0) {
+                    const result = rightVal / multiplier;
+                    LOG_DEBUG('solveEquationWithBlank: solved', multiplier, '*X =', rightVal, '→ X =', result);
+                    return result;
+                }
+            } else if (xDivMatch) {
+                // X / N = value → X = value * N
+                const divisor = parseFloat(xDivMatch[1]);
+                if (!isNaN(divisor) && divisor !== 0) {
+                    const result = rightVal * divisor;
+                    LOG_DEBUG('solveEquationWithBlank: solved X/', divisor, '=', rightVal, '→ X =', result);
+                    return result;
+                }
+            } else if (divXMatch) {
+                // N / X = value → X = N / value
+                const numerator = parseFloat(divXMatch[1]);
+                if (!isNaN(numerator) && rightVal !== 0) {
+                    const result = numerator / rightVal;
+                    LOG_DEBUG('solveEquationWithBlank: solved', numerator, '/X =', rightVal, '→ X =', result);
+                    return result;
+                }
+            }
+        }
+    } else if (!xOnLeft && xOnRight) {
+        // X is on right side, try to solve algebraically
+        const xTimesMatch = right.match(xTimesPattern);
+        const timesXMatch = right.match(timesXPattern);
+        const xDivMatch = right.match(xDivPattern);
+        const divXMatch = right.match(divXPattern);
+        
+        const leftVal = evaluateMathExpression(left);
+        
+        if (leftVal !== null) {
+            if (xTimesMatch) {
+                // value = X * N → X = value / N
+                const multiplier = parseFloat(xTimesMatch[1]);
+                if (!isNaN(multiplier) && multiplier !== 0) {
+                    const result = leftVal / multiplier;
+                    LOG_DEBUG('solveEquationWithBlank: solved', leftVal, '= X*', multiplier, '→ X =', result);
+                    return result;
+                }
+            } else if (timesXMatch) {
+                // value = N * X → X = value / N
+                const multiplier = parseFloat(timesXMatch[1]);
+                if (!isNaN(multiplier) && multiplier !== 0) {
+                    const result = leftVal / multiplier;
+                    LOG_DEBUG('solveEquationWithBlank: solved', leftVal, '=', multiplier, '*X → X =', result);
+                    return result;
+                }
+            } else if (xDivMatch) {
+                // value = X / N → X = value * N
+                const divisor = parseFloat(xDivMatch[1]);
+                if (!isNaN(divisor) && divisor !== 0) {
+                    const result = leftVal * divisor;
+                    LOG_DEBUG('solveEquationWithBlank: solved', leftVal, '= X/', divisor, '→ X =', result);
+                    return result;
+                }
+            } else if (divXMatch) {
+                // value = N / X → X = N / value
+                const numerator = parseFloat(divXMatch[1]);
+                if (!isNaN(numerator) && leftVal !== 0) {
+                    const result = numerator / leftVal;
+                    LOG_DEBUG('solveEquationWithBlank: solved', leftVal, '=', numerator, '/X → X =', result);
+                    return result;
+                }
+            }
+        }
+    }
+    
     // Try to solve by substitution - test each possible answer
     // This is simpler than algebraic solving and works for basic equations
-    // Extended range to handle larger numbers (e.g., 0 to 1000)
+    // Extended range to handle larger numbers (e.g., -10000 to 10000)
+    // Also try decimal values with step 0.1 for cases like X = 1.1
     for (let x = -10000; x <= 10000; x++) {
         const leftVal = evaluateMathExpression(left.replace(/X/g, `(${x})`));
         const rightVal = evaluateMathExpression(right.replace(/X/g, `(${x})`));
@@ -724,6 +885,19 @@ function solveEquationWithBlank(equation) {
         if (leftVal !== null && rightVal !== null && Math.abs(leftVal - rightVal) < 0.0001) {
             LOG_DEBUG('solveEquationWithBlank: found X =', x);
             return x;
+        }
+    }
+    
+    // Try decimal values if integer search failed (for cases like X = 1.1)
+    // Search from -100 to 100 with step 0.1
+    for (let x = -100; x <= 100; x += 0.1) {
+        const leftVal = evaluateMathExpression(left.replace(/X/g, `(${x})`));
+        const rightVal = evaluateMathExpression(right.replace(/X/g, `(${x})`));
+        
+        if (leftVal !== null && rightVal !== null && Math.abs(leftVal - rightVal) < 0.0001) {
+            LOG_DEBUG('solveEquationWithBlank: found X =', x, '(decimal)');
+            // Round to reasonable precision (1 decimal place)
+            return Math.round(x * 10) / 10;
         }
     }
     
@@ -865,9 +1039,173 @@ function solveMathChallengeBlob() {
         }
     }
     
-    // NEW: Check for NumberLine iframe first (before Spinner and other iframe checks)
-    // NumberLine is for "Show this another way" challenges with slider
+    // NEW: Check for "Show this another way" challenges FIRST (before NumberLine check)
+    // These can have:
+    // 1. An iframe with block diagram + multiple choice options OR text input
+    // 2. KaTeX number in main area + choices with block diagrams (no main iframe)
+    // 3. Pie chart + NumberLine slider (special case)
+    const header = challengeContainer.querySelector('[data-test="challenge-header"]');
+    const headerText = header ? header.textContent.toLowerCase() : '';
+    const isShowAnotherWay = headerText.includes('show') && headerText.includes('another') && headerText.includes('way');
+    
+    if (isShowAnotherWay) {
+        // Check for pie chart + NumberLine slider variant
+        if (numberLineIframe && mathWebIframe) {
+            // Check if main iframe contains pie chart
+            const srcdoc = mathWebIframe.getAttribute('srcdoc');
+            if (srcdoc && srcdoc.includes('<svg')) {
+                const rectCount = (srcdoc.match(/<rect/g) || []).length;
+                const pathCount = (srcdoc.match(/<path/g) || []).length;
+                const circleCount = (srcdoc.match(/<circle/g) || []).length;
+                
+                // IMPROVED: Better distinction between pie charts and block diagrams
+                // Pie charts: few rects (< 10), paths for sectors, and often has circles
+                // Block diagrams: many rects (10+)
+                const hasManyRects = rectCount >= 10;
+                const hasManyPaths = pathCount >= 3;
+                const hasFewRects = rectCount < 10;
+                const hasCircle = circleCount > 0;
+                
+                // If it has many rects, it's a block diagram, not a pie chart
+                const isBlockDiagram = hasManyRects;
+                const isPieChart = !isBlockDiagram && ((hasManyPaths && hasFewRects) || (hasCircle && hasFewRects));
+                
+                LOG_DEBUG('solveMathChallengeBlob: Show another way check - pie chart + slider: rects:', rectCount, ', paths:', pathCount, ', circles:', circleCount, ', isBlockDiagram:', isBlockDiagram, ', isPieChart:', isPieChart);
+                
+                if (isPieChart) {
+                    LOG('solveMathChallengeBlob: detected SHOW ANOTHER WAY type (pie chart + NumberLine slider)');
+                    return solveMathShowAnotherWayPieChartSlider(challengeContainer, mathWebIframe, numberLineIframe);
+                }
+            }
+        }
+        
+        // Check for other "Show this another way" variants
+        if (choices.length > 0 || textInput) {
+            // Check if main area has an iframe with block diagram
+            if (mathWebIframe) {
+                const srcdoc = mathWebIframe.getAttribute('srcdoc');
+                if (srcdoc) {
+                    // Check if iframe contains block diagram (SVG with many rect elements)
+                    // Block diagrams have many <rect> elements, pie charts have <path> elements for sectors
+                    const rectCount = (srcdoc.match(/<rect/g) || []).length;
+                    const pathCount = (srcdoc.match(/<path/g) || []).length;
+                    
+                    // Block diagrams typically have many rects (10+), pie charts have fewer paths (usually < 20)
+                    // Pie charts have paths with specific fill colors for sectors, block diagrams have rects with fill colors
+                    // Check if there are many rects (indicating blocks) vs few paths (indicating pie sectors)
+                    const hasManyRects = rectCount >= 10;
+                    const hasFewPaths = pathCount < 30; // Pie charts usually have < 30 paths
+                    const isBlockDiagram = hasManyRects || (rectCount > 5 && rectCount > pathCount);
+                    
+                    LOG_DEBUG('solveMathChallengeBlob: Show another way check - rects:', rectCount, ', paths:', pathCount, ', isBlockDiagram:', isBlockDiagram);
+                    
+                    if (isBlockDiagram) {
+                        if (choices.length > 0) {
+                            LOG('solveMathChallengeBlob: detected SHOW ANOTHER WAY type (block diagram + choices)');
+                            // Check if there's a number in KaTeX that we should match
+                            // Look for KaTeX elements outside of choices (in the main challenge area)
+                            const equationContainer = challengeContainer.querySelector('._1KXkZ') || 
+                                                       challengeContainer.querySelector('._2On2O') ||
+                                                       challengeContainer.querySelector('[data-test="challenge-header"]')?.parentElement;
+                            return solveMathShowAnotherWay(challengeContainer, mathWebIframe, choices, equationContainer);
+                        } else if (textInput) {
+                            LOG('solveMathChallengeBlob: detected SHOW ANOTHER WAY type (block diagram + text input)');
+                            return solveMathShowAnotherWayTextInput(challengeContainer, mathWebIframe, textInput);
+                        }
+                    }
+                }
+            } else if (choices.length > 0) {
+                // No main iframe, but we have choices - check if choices have block diagrams
+                // and main area has KaTeX number
+                let choicesHaveBlockDiagrams = false;
+                for (const choice of choices) {
+                    const choiceIframe = choice.querySelector('iframe[title="Math Web Element"]');
+                    if (choiceIframe) {
+                        const choiceSrcdoc = choiceIframe.getAttribute('srcdoc');
+                        if (choiceSrcdoc) {
+                            const rectCount = (choiceSrcdoc.match(/<rect/g) || []).length;
+                            const pathCount = (choiceSrcdoc.match(/<path/g) || []).length;
+                            const hasManyRects = rectCount >= 10;
+                            const hasFewPaths = pathCount < 30;
+                            const isBlockDiagram = hasManyRects || (rectCount > 5 && rectCount > pathCount);
+                            if (isBlockDiagram) {
+                                choicesHaveBlockDiagrams = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (choicesHaveBlockDiagrams) {
+                    // Check if main area has KaTeX number (not in choices)
+                    const allKatex = challengeContainer.querySelectorAll('.katex');
+                    let mainKatexFound = false;
+                    let mainKatexValue = null;
+                    
+                    for (const katex of allKatex) {
+                        let isInChoice = false;
+                        for (const choice of choices) {
+                            if (choice.contains(katex)) {
+                                isInChoice = true;
+                                break;
+                            }
+                        }
+                        if (!isInChoice) {
+                            const katexValue = extractKatexValue(katex);
+                            if (katexValue) {
+                                const parsedValue = evaluateMathExpression(katexValue);
+                                if (parsedValue !== null && !isNaN(parsedValue)) {
+                                    mainKatexFound = true;
+                                    mainKatexValue = parsedValue;
+                                    LOG_DEBUG('solveMathChallengeBlob: found main KaTeX value =', mainKatexValue);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (mainKatexFound) {
+                        LOG('solveMathChallengeBlob: detected SHOW ANOTHER WAY type (KaTeX number + block diagram choices)');
+                        // Try multiple selectors to find the container with the KaTeX element
+                        const equationContainer = challengeContainer.querySelector('._1KXkZ') || 
+                                                   challengeContainer.querySelector('._2On2O') ||
+                                                   challengeContainer.querySelector('[data-test="challenge-header"]')?.parentElement;
+                        return solveMathShowAnotherWay(challengeContainer, null, choices, equationContainer);
+                    }
+                }
+            }
+        }
+    }
+    
+    // NEW: Check for NumberLine iframe (after "Show this another way" check)
+    // NumberLine is for slider challenges
+    // IMPROVED: Before treating as generic slider, check if it's pie chart + slider (even without "Show another way" header)
     if (numberLineIframe) {
+        // Check if there's also a mathWebIframe with a pie chart
+        if (mathWebIframe) {
+            const srcdoc = mathWebIframe.getAttribute('srcdoc');
+            if (srcdoc && srcdoc.includes('<svg')) {
+                const rectCount = (srcdoc.match(/<rect/g) || []).length;
+                const pathCount = (srcdoc.match(/<path/g) || []).length;
+                const circleCount = (srcdoc.match(/<circle/g) || []).length;
+                
+                // Check if it's a pie chart (not a block diagram)
+                const hasManyRects = rectCount >= 10;
+                const hasManyPaths = pathCount >= 3;
+                const hasFewRects = rectCount < 10;
+                const hasCircle = circleCount > 0;
+                
+                const isBlockDiagram = hasManyRects;
+                const isPieChart = !isBlockDiagram && ((hasManyPaths && hasFewRects) || (hasCircle && hasFewRects));
+                
+                if (isPieChart) {
+                    LOG('solveMathChallengeBlob: detected PIE CHART + NUMBER LINE SLIDER type (fallback detection)');
+                    LOG_DEBUG('solveMathChallengeBlob: pie chart + slider (fallback) - rects:', rectCount, ', paths:', pathCount, ', circles:', circleCount);
+                    return solveMathShowAnotherWayPieChartSlider(challengeContainer, mathWebIframe, numberLineIframe);
+                }
+            }
+        }
+        
         LOG('solveMathChallengeBlob: detected NUMBER LINE SLIDER type (NumberLine iframe found)');
         return solveMathInteractiveSlider(challengeContainer, numberLineIframe);
     }
@@ -895,6 +1233,18 @@ function solveMathChallengeBlob() {
         }
     }
     
+    // NEW: Check if this is "Select the factors" challenge
+    // This is when we have a number in KaTeX and choices with lists of numbers
+    if (equationContainer && choices.length > 0) {
+        const header = challengeContainer.querySelector('[data-test="challenge-header"]');
+        const headerText = header ? header.textContent.toLowerCase() : '';
+        
+        if (headerText.includes('select') && headerText.includes('factor')) {
+            LOG('solveMathChallengeBlob: detected SELECT FACTORS type');
+            return solveMathSelectFactors(challengeContainer, equationContainer, choices);
+        }
+    }
+    
     // NEW: Check if this is "Select the answer" with pie chart choices
     // This is when we have an equation + multiple choice radio buttons where each choice contains a pie chart iframe
     if (equationContainer && choices.length > 0) {
@@ -914,6 +1264,13 @@ function solveMathChallengeBlob() {
             LOG('solveMathChallengeBlob: detected SELECT PIE CHART type (', choicesWithPieCharts, 'pie chart choices)');
             return solveMathSelectPieChart(challengeContainer, equationContainer, choices);
         }
+    }
+    
+    // IMPORTANT: Check for pattern table BEFORE checking for general iframe
+    // Pattern tables can contain iframes for visual results, but should be handled as pattern challenges
+    if (patternTable) {
+        LOG('solveMathChallengeBlob: detected PATTERN TABLE type');
+        return solveMathPatternTable(challengeContainer, patternTable);
     }
     
     if (mathWebIframe) {
@@ -963,16 +1320,52 @@ function solveMathChallengeBlob() {
         // NEW: Check if this is "pie chart + text input" type (Show this another way)
         // This is when we have a pie chart iframe but need to TYPE the fraction, not use a slider
         const srcdoc = mathWebIframe.getAttribute('srcdoc');
-        const hasPieChart = srcdoc && srcdoc.includes('<svg') && srcdoc.includes('<path');
-        const hasNoOutputVars = outputVars === null || outputVars === undefined;
-        
-        if (hasPieChart && textInput && hasNoOutputVars) {
+        if (srcdoc && textInput && (outputVars === null || outputVars === undefined)) {
+            // Check if this is a pie chart (not a block diagram)
+            // Pie charts have <path> elements with fill colors for sectors, but few or no <rect> elements
+            // Block diagrams have many <rect> elements (10+)
+            const rectCount = (srcdoc.match(/<rect/g) || []).length;
+            const pathCount = (srcdoc.match(/<path/g) || []).length;
+            const circleCount = (srcdoc.match(/<circle/g) || []).length;
+            
+            // IMPROVED: Better distinction between pie charts and block diagrams
+            // Pie charts: few rects (< 10), paths for sectors (usually < 30), and often has circles
+            // Block diagrams: many rects (10+), fewer paths (just structural lines)
+            const hasManyRects = rectCount >= 10;
+            const hasCircle = circleCount > 0;
+            const hasManyPaths = pathCount >= 20;
+            
+            // If it has many rects, it's definitely a block diagram (not a pie chart)
+            const isBlockDiagram = hasManyRects;
+            const isPieChart = !isBlockDiagram && srcdoc.includes('<svg') && srcdoc.includes('<path') && 
+                              (hasCircle || (pathCount >= 3 && pathCount < 30));
+            
+            LOG_DEBUG('solveMathChallengeBlob: iframe + text input - rects:', rectCount, ', paths:', pathCount, 
+                     ', circles:', circleCount, ', isBlockDiagram:', isBlockDiagram, ', isPieChart:', isPieChart);
+            
+            if (isPieChart) {
             LOG('solveMathChallengeBlob: detected PIE CHART + TEXT INPUT type');
             return solveMathPieChartTextInput(challengeContainer, mathWebIframe, textInput);
+            } else if (isBlockDiagram) {
+                LOG('solveMathChallengeBlob: detected BLOCK DIAGRAM + TEXT INPUT type');
+                return solveMathShowAnotherWayTextInput(challengeContainer, mathWebIframe, textInput);
+            }
         }
         
         // NEW: Check if this is "pie chart + select fraction" type (Show this another way)
         // This is when we have a pie chart iframe and need to SELECT the matching fraction from choices
+        const hasNoOutputVars = (outputVars === null || outputVars === undefined);
+        const srcdocForPieCheck = mathWebIframe.getAttribute('srcdoc');
+        let hasPieChart = false;
+        if (srcdocForPieCheck) {
+            const rectCount = (srcdocForPieCheck.match(/<rect/g) || []).length;
+            const pathCount = (srcdocForPieCheck.match(/<path/g) || []).length;
+            const circleCount = (srcdocForPieCheck.match(/<circle/g) || []).length;
+            const hasManyRects = rectCount >= 10;
+            hasPieChart = !hasManyRects && srcdocForPieCheck.includes('<svg') && srcdocForPieCheck.includes('<path') && 
+                          (circleCount > 0 || (pathCount >= 3 && pathCount < 30));
+        }
+        
         if (hasPieChart && choices.length > 0 && hasNoOutputVars) {
             // Verify choices contain fractions (not pie charts)
             let choicesHaveFractions = false;
@@ -1050,9 +1443,16 @@ function solveMathChallengeBlob() {
         
         // Check if this is a comparison challenge with choices (e.g., "1/4 > ?")
         // Has comparison operator AND \duoblank AND choices with fractions (not pie charts)
-        const hasComparison = eqText.includes('<') || eqText.includes('>') || 
+        // IMPORTANT: If equation contains =, it's NOT a comparison, it's an equation
+        // Check for comparison operators, but ignore LaTeX \left( and \right) commands
+        // which contain < and > characters
+        let tempEqText = eqText.replace(/\\left\(/g, '').replace(/\\right\)/g, '')
+                                .replace(/\\left\[/g, '').replace(/\\right\]/g, '')
+                                .replace(/\\left\{/g, '').replace(/\\right\}/g, '');
+        const hasEquals = tempEqText.includes('=');
+        const hasComparison = !hasEquals && (tempEqText.includes('<') || tempEqText.includes('>') || 
                               eqText.includes('\\lt') || eqText.includes('\\gt') ||
-                              eqText.includes('\\le') || eqText.includes('\\ge');
+                              eqText.includes('\\le') || eqText.includes('\\ge'));
         
         if (hasComparison && hasBlank && choices.length > 0 && !choicesHaveIframes) {
             LOG('solveMathChallengeBlob: detected COMPARISON CHOICE type (text fraction choices)');
@@ -1062,10 +1462,6 @@ function solveMathChallengeBlob() {
         // Type 2: "Select the answer" - equation with blank AND choices to click
         LOG('solveMathChallengeBlob: detected EQUATION WITH BLANK type');
         return solveMathEquationBlank(challengeContainer, equationContainer);
-    } else if (patternTable) {
-        // Type 1: "Follow the pattern" - table with rows
-        LOG('solveMathChallengeBlob: detected PATTERN TABLE type');
-        return solveMathPatternTable(challengeContainer, patternTable);
     } else if (tapTokens.length > 0) {
         // Type 6: "Match the pairs" - tap tokens to match expressions with results
         LOG('solveMathChallengeBlob: detected MATCH THE PAIRS type');
@@ -1174,15 +1570,26 @@ function solveMathComparisonChoice(challengeContainer, equationContainer, choice
     const eqText = annotation.textContent;
     LOG('solveMathComparisonChoice: equation =', eqText);
     
-    // Detect comparison operator
+    // Detect comparison operator, but ignore LaTeX \left( and \right) commands
+    // First, replace LaTeX parentheses to avoid false positives
+    let tempEqText = eqText.replace(/\\left\(/g, '').replace(/\\right\)/g, '')
+                            .replace(/\\left\[/g, '').replace(/\\right\]/g, '')
+                            .replace(/\\left\{/g, '').replace(/\\right\}/g, '');
+    
+    // If equation contains =, it's not a comparison - return null to let it be handled as equation
+    if (tempEqText.includes('=')) {
+        LOG_DEBUG('solveMathComparisonChoice: equation contains =, not a comparison');
+        return null;
+    }
+    
     let comparisonOperator = null;
-    if (eqText.includes('<=') || eqText.includes('\\le')) {
+    if (tempEqText.includes('<=') || eqText.includes('\\le')) {
         comparisonOperator = '<=';
-    } else if (eqText.includes('>=') || eqText.includes('\\ge')) {
+    } else if (tempEqText.includes('>=') || eqText.includes('\\ge')) {
         comparisonOperator = '>=';
-    } else if (eqText.includes('<') || eqText.includes('\\lt')) {
+    } else if (tempEqText.includes('<') || eqText.includes('\\lt')) {
         comparisonOperator = '<';
-    } else if (eqText.includes('>') || eqText.includes('\\gt')) {
+    } else if (tempEqText.includes('>') || eqText.includes('\\gt')) {
         comparisonOperator = '>';
     }
     
@@ -1193,8 +1600,7 @@ function solveMathComparisonChoice(challengeContainer, equationContainer, choice
     
     LOG('solveMathComparisonChoice: operator =', comparisonOperator);
     
-    // Extract the left side value (the fraction before the operator)
-    // E.g., from "\mathbf{\frac{1}{4}>\duoblank{1}}" extract 1/4
+    // Extract the left side value (the expression before the operator)
     let cleanedExpr = eqText;
     
     // Remove \mathbf{}, \textbf{} wrappers
@@ -1205,17 +1611,36 @@ function solveMathComparisonChoice(challengeContainer, equationContainer, choice
         cleanedExpr = extractLatexContent(cleanedExpr, '\\textbf');
     }
     
+    // Replace LaTeX parentheses BEFORE splitting
+    cleanedExpr = cleanedExpr.replace(/\\left\(/g, '(')
+                             .replace(/\\right\)/g, ')')
+                             .replace(/\\left\[/g, '[')
+                             .replace(/\\right\]/g, ']')
+                             .replace(/\\left\{/g, '{')
+                             .replace(/\\right\}/g, '}');
+    
     // Split by comparison operator to get left side
     let leftSide = cleanedExpr;
     const operators = ['<=', '>=', '\\le', '\\ge', '<', '>', '\\lt', '\\gt'];
     for (const op of operators) {
-        if (leftSide.includes(op)) {
-            leftSide = leftSide.split(op)[0];
+        // Use the cleaned version for splitting
+        const opToUse = op.replace('\\le', '<=').replace('\\ge', '>=').replace('\\lt', '<').replace('\\gt', '>');
+        if (leftSide.includes(opToUse)) {
+            leftSide = leftSide.split(opToUse)[0];
             break;
         }
     }
     
     LOG_DEBUG('solveMathComparisonChoice: left side =', leftSide);
+    
+    // Convert LaTeX math operators to standard operators
+    leftSide = leftSide.replace(/\\cdot/g, '*')
+                       .replace(/\\times/g, '*')
+                       .replace(/\\div/g, '/')
+                       .replace(/×/g, '*')
+                       .replace(/÷/g, '/')
+                       .replace(/−/g, '-')
+                       .replace(/⋅/g, '*');
     
     // Convert \frac{a}{b} to (a/b)
     while (leftSide.includes('\\frac{')) {
@@ -1245,6 +1670,20 @@ function solveMathComparisonChoice(challengeContainer, equationContainer, choice
         
         leftSide = leftSide.substring(0, fracStart) + '(' + numerator + '/' + denominator + ')' + leftSide.substring(denomEnd);
     }
+    
+    // Remove \duoblank{...} if present (shouldn't be in left side, but just in case)
+    leftSide = leftSide.replace(/\\duoblank\{[^}]*\}/g, '');
+    
+    // Remove remaining braces (from LaTeX formatting)
+    leftSide = leftSide.replace(/\{/g, '').replace(/\}/g, '');
+    
+    // Remove whitespace
+    leftSide = leftSide.replace(/\s+/g, '');
+    
+    // Remove any remaining = signs (shouldn't be there, but clean up)
+    leftSide = leftSide.replace(/=/g, '');
+    
+    LOG_DEBUG('solveMathComparisonChoice: cleaned left side =', leftSide);
     
     // Evaluate the left side
     const leftValue = evaluateMathExpression(leftSide);
@@ -1569,21 +2008,21 @@ function solveMathEquationBlank(challengeContainer, equationContainer) {
         const choiceValue = extractKatexValue(choices[i]);
         LOG('solveMathEquationBlank: choice', i, '- value:', choiceValue);
         
-        let choiceNum;
+        let choiceNum = null;
         
-        // Check if this is an expression (contains operators) or a simple number
-        const isExpression = choiceValue && /[+\-*/]/.test(choiceValue);
+        // First, try to evaluate as expression (handles operators, powers, etc.)
+        // This will handle cases like {1}^{1}, 1*4, etc.
+        choiceNum = evaluateMathExpression(choiceValue);
         
-        if (isExpression) {
-            // Evaluate as expression
-            choiceNum = evaluateMathExpression(choiceValue);
-            LOG_DEBUG('solveMathEquationBlank: evaluated expression', choiceValue, '=', choiceNum);
-        } else {
-            // Parse as simple number
+        if (choiceNum === null || isNaN(choiceNum)) {
+            // If evaluation failed, try parsing as simple number
             choiceNum = parseFloat(choiceValue);
+            LOG_DEBUG('solveMathEquationBlank: parsed as number', choiceValue, '=', choiceNum);
+        } else {
+            LOG_DEBUG('solveMathEquationBlank: evaluated expression', choiceValue, '=', choiceNum);
         }
         
-        if (!isNaN(choiceNum) && choiceNum === answer) {
+        if (!isNaN(choiceNum) && (choiceNum === answer || approximatelyEqual(choiceNum, answer))) {
             matchingIndices.push(i);
             LOG('solveMathEquationBlank: found matching choice at index', i, '(', choiceValue, '=', choiceNum, ')');
             
@@ -1706,7 +2145,12 @@ function solveMathTypeAnswer(challengeContainer, equationContainer, textInput) {
     }
     
     // Check if this is an inequality with a blank (e.g., "5/5 > ?")
-    const hasInequality = equation.includes('>') || equation.includes('<') ||
+    // IMPORTANT: Check for inequality operators but ignore LaTeX \left( and \right) commands
+    // which contain < and > characters
+    let tempEquation = equation.replace(/\\left\(/g, '').replace(/\\right\)/g, '')
+                               .replace(/\\left\[/g, '').replace(/\\right\]/g, '')
+                               .replace(/\\left\{/g, '').replace(/\\right\}/g, '');
+    const hasInequality = tempEquation.includes('>') || tempEquation.includes('<') ||
                           equation.includes('\\gt') || equation.includes('\\lt') ||
                           equation.includes('\\ge') || equation.includes('\\le');
     const hasBlank = equation.includes('\\duoblank');
@@ -1862,20 +2306,29 @@ function solveInequalityWithBlank(equation) {
         cleaned = extractLatexContent(cleaned, '\\textbf');
     }
     
+    // Replace LaTeX parentheses BEFORE checking for operators
+    // This prevents \left( from being detected as <
+    cleaned = cleaned.replace(/\\left\(/g, '(')
+                     .replace(/\\right\)/g, ')')
+                     .replace(/\\left\[/g, '[')
+                     .replace(/\\right\]/g, ']')
+                     .replace(/\\left\{/g, '{')
+                     .replace(/\\right\}/g, '}');
+    
     // Detect the comparison operator and normalize
     let operator = null;
     let operatorStr = null;
     
-    if (cleaned.includes('>=') || cleaned.includes('\\ge')) {
+    if (cleaned.includes('>=') || equation.includes('\\ge')) {
         operator = '>=';
         operatorStr = cleaned.includes('>=') ? '>=' : '\\ge';
-    } else if (cleaned.includes('<=') || cleaned.includes('\\le')) {
+    } else if (cleaned.includes('<=') || equation.includes('\\le')) {
         operator = '<=';
         operatorStr = cleaned.includes('<=') ? '<=' : '\\le';
-    } else if (cleaned.includes('>') || cleaned.includes('\\gt')) {
+    } else if (cleaned.includes('>') || equation.includes('\\gt')) {
         operator = '>';
         operatorStr = cleaned.includes('>') ? '>' : '\\gt';
-    } else if (cleaned.includes('<') || cleaned.includes('\\lt')) {
+    } else if (cleaned.includes('<') || equation.includes('\\lt')) {
         operator = '<';
         operatorStr = cleaned.includes('<') ? '<' : '\\lt';
     }
@@ -2176,14 +2629,334 @@ function solveMathPieChartSelectFraction(challengeContainer, iframe, choices) {
 }
 
 /**
- * Solve "Round to the nearest X" challenges
- * The page shows a number (e.g., 99) and asks to round it to nearest 10/100/1000
- * Choices are block diagrams representing different values
- * @param {Element} challengeContainer - The challenge container
- * @param {Element} equationContainer - The container with the number to round
- * @param {NodeList|Array} choices - The choice elements with block diagrams
- * @param {number} roundingBase - The rounding base (10, 100, 1000, etc.)
+ * Solve "Show this another way" challenge
+ * The page shows a block diagram in an iframe and multiple choice options.
+ * The user needs to select the choice that matches the number or block count.
+ * Choices can contain either:
+ * - Numbers in KaTeX
+ * - Block diagrams in iframes
  */
+function solveMathShowAnotherWay(challengeContainer, iframe, choices, equationContainer) {
+    LOG('solveMathShowAnotherWay: starting');
+    
+    // Determine target value: either from KaTeX number or from iframe block count
+    let targetValue = null;
+    let targetSource = null; // Track where we got the value from for debugging
+    
+    // First, try to get target from KaTeX (equationContainer)
+    if (equationContainer) {
+        const katexElement = equationContainer.querySelector('.katex');
+        if (katexElement) {
+            const katexValue = extractKatexValue(katexElement);
+            LOG_DEBUG('solveMathShowAnotherWay: equationContainer KaTeX raw value =', katexValue);
+            if (katexValue) {
+                const parsedValue = evaluateMathExpression(katexValue);
+                if (parsedValue !== null && !isNaN(parsedValue)) {
+                    targetValue = parsedValue;
+                    targetSource = 'equationContainer KaTeX';
+                    LOG('solveMathShowAnotherWay: target value from KaTeX (equationContainer) =', targetValue);
+                }
+            }
+        } else {
+            LOG_DEBUG('solveMathShowAnotherWay: no .katex found in equationContainer');
+        }
+    } else {
+        LOG_DEBUG('solveMathShowAnotherWay: equationContainer is null');
+    }
+    
+    // If not found, try to find KaTeX in challenge container (but not in choices)
+    // This is important when equationContainer doesn't contain the KaTeX or is null
+    if ((targetValue === null || isNaN(targetValue)) && challengeContainer) {
+        // Find all KaTeX elements, but exclude those in choices
+        const allKatex = challengeContainer.querySelectorAll('.katex');
+        LOG_DEBUG('solveMathShowAnotherWay: found', allKatex.length, 'KaTeX elements in container');
+        
+        for (const katex of allKatex) {
+            // Check if this KaTeX is not inside any choice
+            let isInChoice = false;
+            for (const choice of choices) {
+                if (choice.contains(katex)) {
+                    isInChoice = true;
+                    break;
+                }
+            }
+            
+            // Also exclude if it's inside an iframe (not part of main content)
+            const isInIframe = katex.closest('iframe') !== null;
+            
+            if (!isInChoice && !isInIframe) {
+                const katexValue = extractKatexValue(katex);
+                LOG_DEBUG('solveMathShowAnotherWay: found main KaTeX element, raw value =', katexValue);
+                if (katexValue) {
+                    const parsedValue = evaluateMathExpression(katexValue);
+                    if (parsedValue !== null && !isNaN(parsedValue)) {
+                        targetValue = parsedValue;
+                        targetSource = 'container KaTeX';
+                        LOG('solveMathShowAnotherWay: target value from KaTeX (found in container) =', targetValue);
+                        break;
+                    } else {
+                        LOG_DEBUG('solveMathShowAnotherWay: failed to parse KaTeX value', katexValue);
+                    }
+                }
+            } else if (isInChoice) {
+                LOG_DEBUG('solveMathShowAnotherWay: skipping KaTeX (in choice)');
+            } else if (isInIframe) {
+                LOG_DEBUG('solveMathShowAnotherWay: skipping KaTeX (in iframe)');
+            }
+        }
+    }
+    
+    // If no KaTeX value and iframe exists, extract from iframe block count
+    if ((targetValue === null || isNaN(targetValue)) && iframe) {
+        const srcdoc = iframe.getAttribute('srcdoc');
+        if (!srcdoc) {
+            LOG_ERROR('solveMathShowAnotherWay: iframe srcdoc not found');
+            return null;
+        }
+        
+        const blockCount = extractBlockDiagramValue(srcdoc);
+        if (blockCount === null) {
+            LOG_ERROR('solveMathShowAnotherWay: could not extract block count from iframe');
+            return null;
+        }
+        
+        targetValue = blockCount;
+        targetSource = 'iframe block diagram';
+        LOG('solveMathShowAnotherWay: target value from iframe block count =', targetValue);
+    }
+    
+    // Validate that we have a target value
+    if (targetValue === null || isNaN(targetValue)) {
+        LOG_ERROR('solveMathShowAnotherWay: could not determine target value');
+        LOG_DEBUG('solveMathShowAnotherWay: iframe =', !!iframe, ', equationContainer =', !!equationContainer, ', choices =', choices.length);
+        return null;
+    }
+    
+    LOG('solveMathShowAnotherWay: using target value', targetValue, 'from', targetSource);
+    
+    // Find the choice with matching value
+    let matchedChoice = null;
+    let matchedIndex = -1;
+    
+    for (let i = 0; i < choices.length; i++) {
+        const choice = choices[i];
+        
+        // Method 1: Check if choice has KaTeX number
+        const katexElement = choice.querySelector('.katex');
+        if (katexElement) {
+            const choiceText = extractKatexValue(katexElement);
+            if (choiceText) {
+                const choiceValue = evaluateMathExpression(choiceText);
+                LOG_DEBUG('solveMathShowAnotherWay: choice', i, 'KaTeX value =', choiceValue);
+                
+                if (choiceValue !== null && !isNaN(choiceValue) && Math.abs(choiceValue - targetValue) < 0.0001) {
+                    matchedChoice = choice;
+                    matchedIndex = i;
+                    LOG('solveMathShowAnotherWay: found matching choice', i, 'with KaTeX value', choiceValue);
+                    break;
+                }
+            }
+        }
+        
+        // Method 2: Check if choice has iframe with block diagram
+        const choiceIframe = choice.querySelector('iframe[title="Math Web Element"]');
+        if (choiceIframe && !matchedChoice) {
+            const choiceSrcdoc = choiceIframe.getAttribute('srcdoc');
+            if (choiceSrcdoc) {
+                const choiceBlockCount = extractBlockDiagramValue(choiceSrcdoc);
+                LOG_DEBUG('solveMathShowAnotherWay: choice', i, 'block count =', choiceBlockCount);
+                
+                // Use floating-point comparison to handle cases where targetValue might be 10.0 and blockCount is 10
+                if (choiceBlockCount !== null && Math.abs(choiceBlockCount - targetValue) < 0.0001) {
+                    matchedChoice = choice;
+                    matchedIndex = i;
+                    LOG('solveMathShowAnotherWay: found matching choice', i, 'with block count', choiceBlockCount);
+                    break;
+                }
+            }
+        }
+    }
+    
+    if (!matchedChoice) {
+        LOG_ERROR('solveMathShowAnotherWay: no matching choice found for target value', targetValue);
+        // Log all choices for debugging
+        for (let i = 0; i < choices.length; i++) {
+            const katex = choices[i].querySelector('.katex');
+            if (katex) {
+                const rawValue = extractKatexValue(katex);
+                const value = evaluateMathExpression(rawValue);
+                LOG_DEBUG('solveMathShowAnotherWay: choice', i, '= KaTeX raw:', rawValue, ', evaluated:', value);
+            } else {
+                const choiceIframe = choices[i].querySelector('iframe[title="Math Web Element"]');
+                if (choiceIframe) {
+                    const choiceSrcdoc = choiceIframe.getAttribute('srcdoc');
+                    if (choiceSrcdoc) {
+                        const blockCount = extractBlockDiagramValue(choiceSrcdoc);
+                        LOG_DEBUG('solveMathShowAnotherWay: choice', i, '= block count:', blockCount);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+    
+    // Click the matched choice
+    matchedChoice.dispatchEvent(clickEvent);
+    LOG('solveMathShowAnotherWay: clicked choice', matchedIndex);
+    
+    return {
+        type: 'showAnotherWay',
+        targetValue: targetValue,
+        selectedChoice: matchedIndex
+    };
+}
+
+/**
+ * Solve "Show this another way" challenge with text input
+ * The page shows a block diagram in an iframe and a text input field.
+ * The user needs to type the number that matches the block count.
+ */
+function solveMathShowAnotherWayTextInput(challengeContainer, iframe, textInput) {
+    LOG('solveMathShowAnotherWayTextInput: starting');
+    
+    // Extract block count from iframe
+    const srcdoc = iframe.getAttribute('srcdoc');
+    if (!srcdoc) {
+        LOG_ERROR('solveMathShowAnotherWayTextInput: iframe srcdoc not found');
+        return null;
+    }
+    
+    const blockCount = extractBlockDiagramValue(srcdoc);
+    if (blockCount === null) {
+        LOG_ERROR('solveMathShowAnotherWayTextInput: could not extract block count from iframe');
+        return null;
+    }
+    
+    LOG('solveMathShowAnotherWayTextInput: extracted block count =', blockCount);
+    
+    // Type the block count into the text input
+    const answerStr = String(blockCount);
+    LOG('solveMathShowAnotherWayTextInput: typing answer:', answerStr);
+    
+    dynamicInput(textInput, answerStr);
+    
+    return {
+        type: 'showAnotherWayTextInput',
+        blockCount: blockCount,
+        answer: answerStr
+    };
+}
+
+/**
+ * Solve "Show this another way" challenge with pie chart + NumberLine slider
+ * The page shows a pie chart in an iframe and a NumberLine slider.
+ * The user needs to set the slider to the numerator value (number of colored blocks) from the pie chart.
+ */
+function solveMathShowAnotherWayPieChartSlider(challengeContainer, pieChartIframe, sliderIframe) {
+    LOG('solveMathShowAnotherWayPieChartSlider: starting');
+    
+    // Extract pie chart fraction
+    const pieSrcdoc = pieChartIframe.getAttribute('srcdoc');
+    if (!pieSrcdoc) {
+        LOG_ERROR('solveMathShowAnotherWayPieChartSlider: pie chart iframe srcdoc not found');
+        return null;
+    }
+    
+    const fraction = extractPieChartFraction(pieSrcdoc);
+    if (!fraction || fraction.numerator === null) {
+        LOG_ERROR('solveMathShowAnotherWayPieChartSlider: could not extract pie chart fraction');
+        return null;
+    }
+    
+    // For "Show this another way", we need to use the NUMERATOR (number of colored blocks)
+    // not the fractional value
+    const targetValue = fraction.numerator;
+    LOG('solveMathShowAnotherWayPieChartSlider: extracted pie chart numerator =', targetValue, '(fraction:', fraction.numerator + '/' + fraction.denominator, ')');
+    
+    // Set the value on the NumberLine slider
+    try {
+        const iframeWindow = sliderIframe.contentWindow;
+        if (!iframeWindow) {
+            LOG_ERROR('solveMathShowAnotherWayPieChartSlider: slider iframe contentWindow not accessible');
+            return null;
+        }
+        
+        let success = false;
+        
+        // Method 1: Try to set value via getOutputVariables()
+        if (typeof iframeWindow.getOutputVariables === 'function') {
+            const vars = iframeWindow.getOutputVariables();
+            LOG_DEBUG('solveMathShowAnotherWayPieChartSlider: getOutputVariables() before =', JSON.stringify(vars));
+            
+            if (vars && typeof vars === 'object') {
+                vars.value = targetValue;
+                LOG('solveMathShowAnotherWayPieChartSlider: set vars.value =', targetValue);
+                
+                // Verify the change
+                const varsAfter = iframeWindow.getOutputVariables();
+                LOG_DEBUG('solveMathShowAnotherWayPieChartSlider: getOutputVariables() after =', JSON.stringify(varsAfter));
+                
+                if (varsAfter && varsAfter.value === targetValue) {
+                    success = true;
+                    LOG('solveMathShowAnotherWayPieChartSlider: VALUE SET SUCCESSFULLY via getOutputVariables()');
+                }
+            }
+        }
+        
+        // Fallback: Try OUTPUT_VARS directly on window
+        if (!success && iframeWindow.OUTPUT_VARS !== undefined) {
+            iframeWindow.OUTPUT_VARS.value = targetValue;
+            LOG('solveMathShowAnotherWayPieChartSlider: set OUTPUT_VARS.value =', targetValue);
+            success = true;
+        }
+        
+        // Trigger callbacks to send value to Duolingo
+        if (typeof iframeWindow.postOutputVariables === 'function') {
+            iframeWindow.postOutputVariables();
+            LOG('solveMathShowAnotherWayPieChartSlider: called postOutputVariables()');
+        }
+        
+        if (iframeWindow.duo && typeof iframeWindow.duo.onFirstInteraction === 'function') {
+            iframeWindow.duo.onFirstInteraction();
+            LOG('solveMathShowAnotherWayPieChartSlider: called duo.onFirstInteraction()');
+        }
+        
+        if (iframeWindow.duoDynamic && typeof iframeWindow.duoDynamic.onInteraction === 'function') {
+            iframeWindow.duoDynamic.onInteraction();
+            LOG('solveMathShowAnotherWayPieChartSlider: called duoDynamic.onInteraction()');
+        }
+        
+        // Send postMessage with outputVariables
+        if (iframeWindow.parent && iframeWindow.parent !== iframeWindow) {
+            try {
+                iframeWindow.parent.postMessage({
+                    type: 'outputVariables',
+                    outputVariables: { value: targetValue }
+                }, '*');
+                LOG('solveMathShowAnotherWayPieChartSlider: sent postMessage with outputVariables');
+            } catch (e) {
+                LOG_DEBUG('solveMathShowAnotherWayPieChartSlider: postMessage failed:', e);
+            }
+        }
+        
+        if (success) {
+            LOG('solveMathShowAnotherWayPieChartSlider: SUCCESS - value set to', targetValue);
+            return {
+                type: 'showAnotherWayPieChartSlider',
+                numerator: fraction.numerator,
+                denominator: fraction.denominator,
+                targetValue: targetValue
+            };
+        } else {
+            LOG_ERROR('solveMathShowAnotherWayPieChartSlider: failed to set value');
+            return null;
+        }
+    } catch (e) {
+        LOG_ERROR('solveMathShowAnotherWayPieChartSlider: error setting value:', e);
+        return null;
+    }
+}
+
 function solveMathRoundToNearest(challengeContainer, equationContainer, choices, roundingBase) {
     LOG('solveMathRoundToNearest: starting, base =', roundingBase);
     
@@ -2291,6 +3064,122 @@ function solveMathRoundToNearest(challengeContainer, equationContainer, choices,
         numberToRound: numberToRound,
         roundingBase: roundingBase,
         roundedValue: roundedValue,
+        selectedChoice: matchedIndex
+    };
+}
+
+/**
+ * Solve "Select the factors" challenge
+ * The page shows a number (e.g., 20) and multiple choices with lists of numbers.
+ * The user needs to select the choice where all numbers are factors (divisors) of the given number.
+ */
+function solveMathSelectFactors(challengeContainer, equationContainer, choices) {
+    LOG('solveMathSelectFactors: starting');
+    
+    // Extract the target number from KaTeX
+    const katexElement = equationContainer.querySelector('.katex');
+    if (!katexElement) {
+        LOG_ERROR('solveMathSelectFactors: KaTeX element not found');
+        return null;
+    }
+    
+    const katexValue = extractKatexValue(katexElement);
+    if (!katexValue) {
+        LOG_ERROR('solveMathSelectFactors: could not extract KaTeX value');
+        return null;
+    }
+    
+    const targetNumber = evaluateMathExpression(katexValue);
+    if (targetNumber === null || isNaN(targetNumber) || targetNumber <= 0) {
+        LOG_ERROR('solveMathSelectFactors: invalid target number:', targetNumber);
+        return null;
+    }
+    
+    LOG('solveMathSelectFactors: target number =', targetNumber);
+    
+    // Helper function to check if a number is a factor (divisor) of targetNumber
+    const isFactor = (num) => {
+        if (num <= 0 || num > targetNumber) return false;
+        return targetNumber % num === 0;
+    };
+    
+    // Find the choice where all numbers are factors
+    let matchedChoice = null;
+    let matchedIndex = -1;
+    
+    for (let i = 0; i < choices.length; i++) {
+        const choice = choices[i];
+        
+        // Extract numbers from choice KaTeX
+        const choiceKatex = choice.querySelector('.katex');
+        if (!choiceKatex) {
+            LOG_DEBUG('solveMathSelectFactors: choice', i, 'has no KaTeX element');
+            continue;
+        }
+        
+        const choiceText = extractKatexValue(choiceKatex);
+        if (!choiceText) {
+            LOG_DEBUG('solveMathSelectFactors: choice', i, 'could not extract KaTeX value');
+            continue;
+        }
+        
+        LOG_DEBUG('solveMathSelectFactors: choice', i, 'raw text =', choiceText);
+        
+        // Parse the choice text to extract numbers
+        // Format: "100, 4, 5, 10" or "\mathbf{100, 4, 5, 10}"
+        // Remove LaTeX formatting
+        let cleanedText = choiceText;
+        cleanedText = cleanedText.replace(/\\mathbf\{/g, '');
+        cleanedText = cleanedText.replace(/\}/g, '');
+        cleanedText = cleanedText.replace(/\\textbf\{/g, '');
+        cleanedText = cleanedText.trim();
+        
+        // Extract numbers (split by comma and parse)
+        const numbers = cleanedText.split(',').map(s => {
+            const num = parseInt(s.trim());
+            return isNaN(num) ? null : num;
+        }).filter(n => n !== null);
+        
+        LOG_DEBUG('solveMathSelectFactors: choice', i, 'parsed numbers =', numbers);
+        
+        if (numbers.length === 0) {
+            LOG_DEBUG('solveMathSelectFactors: choice', i, 'has no valid numbers');
+            continue;
+        }
+        
+        // Check if all numbers are factors of targetNumber
+        const allAreFactors = numbers.every(num => isFactor(num));
+        
+        if (allAreFactors) {
+            matchedChoice = choice;
+            matchedIndex = i;
+            LOG('solveMathSelectFactors: found matching choice', i, 'with factors:', numbers);
+            break;
+        } else {
+            LOG_DEBUG('solveMathSelectFactors: choice', i, 'not all numbers are factors');
+        }
+    }
+    
+    if (!matchedChoice) {
+        LOG_ERROR('solveMathSelectFactors: no matching choice found for target number', targetNumber);
+        // Log all choices for debugging
+        for (let i = 0; i < choices.length; i++) {
+            const choiceKatex = choices[i].querySelector('.katex');
+            if (choiceKatex) {
+                const rawValue = extractKatexValue(choiceKatex);
+                LOG_DEBUG('solveMathSelectFactors: choice', i, '= KaTeX raw:', rawValue);
+            }
+        }
+        return null;
+    }
+    
+    // Click the matched choice
+    matchedChoice.dispatchEvent(clickEvent);
+    LOG('solveMathSelectFactors: clicked choice', matchedIndex);
+    
+    return {
+        type: 'selectFactors',
+        targetNumber: targetNumber,
         selectedChoice: matchedIndex
     };
 }
@@ -2487,6 +3376,47 @@ function solveMathSelectPieChart(challengeContainer, equationContainer, choices)
                 matchedChoiceIndex = i;
                 LOG('solveMathSelectPieChart: MATCH found at choice', i);
                 break;
+            }
+        }
+    }
+    
+    // If no match found by value, try matching by numerator from decimal expression
+    // e.g., 0.11*10 = 1.1 should match pie chart 11/20 (numerator 11 from 0.11)
+    if (matchedChoiceIndex === -1) {
+        LOG_DEBUG('solveMathSelectPieChart: no value match found, trying numerator matching');
+        
+        // Extract numerator from decimal expression in the equation
+        // Look for pattern like 0.11*10 or 0.22*10
+        const decimalMatch = equation.match(/0\.(\d+)/);
+        if (decimalMatch) {
+            let decimalPart = decimalMatch[1];
+            // Remove trailing zeros (e.g., "110" → "11", "190" → "19")
+            decimalPart = decimalPart.replace(/0+$/, '') || '0';
+            const expressionNumerator = parseInt(decimalPart, 10);
+            
+            if (!isNaN(expressionNumerator) && expressionNumerator > 0) {
+                LOG_DEBUG('solveMathSelectPieChart: extracted numerator', expressionNumerator, 'from decimal expression');
+                
+                // Try to match with pie chart numerators
+                for (let i = 0; i < choices.length; i++) {
+                    const choice = choices[i];
+                    const choiceIframe = choice.querySelector('iframe[title="Math Web Element"]');
+                    
+                    if (!choiceIframe) continue;
+                    
+                    const srcdoc = choiceIframe.getAttribute('srcdoc');
+                    if (!srcdoc) continue;
+                    
+                    const fraction = extractPieChartFraction(srcdoc);
+                    if (!fraction) continue;
+                    
+                    if (fraction.numerator === expressionNumerator) {
+                        matchedChoiceIndex = i;
+                        LOG('solveMathSelectPieChart: MATCH found by numerator at choice', i, 
+                            '(expression numerator:', expressionNumerator, '= pie chart numerator:', fraction.numerator, ')');
+                        break;
+                    }
+                }
             }
         }
     }
@@ -2852,6 +3782,41 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
         LOG_DEBUG('solveMathMatchPairs: token', i, '- raw value:', value);
         
         if (value) {
+            // Check if this is a list of factors (e.g., "1, 4, 5, 10" or "1,4,5,10")
+            // Factors lists have multiple numbers separated by commas
+            // Also check for label "factors" in the token or check if value looks like a list
+            const hasFactorsLabel = token.textContent.toLowerCase().includes('factor');
+            // IMPROVED: Use a more lenient regex that handles various number list formats
+            const factorsMatch = value.match(/^[\d\s,]+$/);
+            const hasMultipleCommas = (value.match(/,/g) || []).length >= 1; // At least 1 comma for a list
+            
+            LOG_DEBUG('solveMathMatchPairs: checking factors - hasFactorsLabel:', hasFactorsLabel, 
+                     ', factorsMatch:', !!factorsMatch, ', hasMultipleCommas:', hasMultipleCommas, ', value:', value);
+            
+            if ((factorsMatch && hasMultipleCommas) || hasFactorsLabel) {
+                // Parse the factors list
+                const factors = value.split(',').map(s => {
+                    const num = parseInt(s.trim());
+                    return isNaN(num) ? null : num;
+                }).filter(n => n !== null);
+                
+                if (factors.length > 1) {
+                    // This is a list of factors
+                    tokens.push({
+                        index: i,
+                        element: token,
+                        rawValue: value,
+                        numericValue: null, // No single numeric value for factors list
+                        isExpression: false,
+                        isPieChart: false,
+                        isFactorsList: true,
+                        factors: factors
+                    });
+                    LOG('solveMathMatchPairs: token', i, '- FACTORS LIST detected:', factors.join(', '));
+                    continue;
+                }
+            }
+            
             // Try to evaluate as expression (including fractions)
             const evaluated = evaluateMathExpression(value);
             
@@ -2870,7 +3835,8 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
                 rawValue: value,
                 numericValue: evaluated,
                 isExpression: isCompoundExpression,
-                isPieChart: false
+                isPieChart: false,
+                isFactorsList: false
             });
             LOG_DEBUG('solveMathMatchPairs: token', i, '- value:', value, '- evaluated:', evaluated, '- isExpression:', isCompoundExpression);
         }
@@ -2887,12 +3853,13 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
     const blockDiagrams = tokens.filter(t => t.isBlockDiagram);
     const pieCharts = tokens.filter(t => t.isPieChart);
     const roundingTargets = tokens.filter(t => t.isRoundingTarget);
-    const sourceNumbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget);
-    const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram);
+    const factorsLists = tokens.filter(t => t.isFactorsList);
+    const sourceNumbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget && !t.isFactorsList);
+    const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram && !t.isFactorsList);
     
     LOG('solveMathMatchPairs: blockDiagrams:', blockDiagrams.length, ', pieCharts:', pieCharts.length, 
-        ', roundingTargets:', roundingTargets.length, ', sourceNumbers:', sourceNumbers.length,
-        ', numbers/expressions:', numbers.length);
+        ', roundingTargets:', roundingTargets.length, ', factorsLists:', factorsLists.length,
+        ', sourceNumbers:', sourceNumbers.length, ', numbers/expressions:', numbers.length);
     
     // Find matching pairs
     const pairs = [];
@@ -2925,7 +3892,7 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
     }
     // MODE 2: Pie chart matching with fractions
     else if (pieCharts.length > 0 && numbers.length > 0) {
-        // Match pie charts with fractions by comparing numeric values
+        // First try: Match pie charts with fractions by comparing numeric values
         for (const pie of pieCharts) {
             for (const frac of numbers) {
                 if (usedIndices.has(frac.index)) continue;
@@ -2940,11 +3907,224 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
                 }
             }
         }
+        
+        // Second try: Match decimal expression numerators with pie chart numerators
+        // e.g., 0.22*10 → extract numerator 22 from 0.22, match with pie chart 22/30 → 22
+        if (pairs.length === 0) {
+            LOG('solveMathMatchPairs: trying decimal numerator matching mode');
+            
+            // Extract numerators from pie charts
+            const pieNumerators = pieCharts.map(pie => ({
+                pie: pie,
+                numerator: pie.fraction ? pie.fraction.numerator : null
+            })).filter(p => p.numerator !== null);
+            
+            // Extract numerators from decimal expressions (e.g., 0.22*10 → 22)
+            const expressionNumerators = [];
+            for (const num of numbers) {
+                // Check if rawValue contains a decimal pattern like 0.22*10 or 0.19*10
+                // Extract the decimal part and convert to integer numerator
+                const decimalMatch = num.rawValue.match(/0\.(\d+)/);
+                if (decimalMatch) {
+                    let decimalPart = decimalMatch[1];
+                    // Remove trailing zeros (e.g., "220" → "22", "190" → "19")
+                    // But keep at least one digit
+                    decimalPart = decimalPart.replace(/0+$/, '') || '0';
+                    // Convert to integer (explicitly base 10 to avoid octal interpretation)
+                    const numerator = parseInt(decimalPart, 10);
+                    if (!isNaN(numerator) && numerator > 0) {
+                        expressionNumerators.push({
+                            num: num,
+                            numerator: numerator
+                        });
+                        LOG_DEBUG('solveMathMatchPairs: extracted numerator', numerator, 'from expression', num.rawValue, '(decimal part:', decimalMatch[1], '→', decimalPart, ')');
+                    }
+                }
+            }
+            
+            LOG_DEBUG('solveMathMatchPairs: pie chart numerators:', pieNumerators.map(p => p.numerator).join(', '));
+            LOG_DEBUG('solveMathMatchPairs: expression numerators:', expressionNumerators.map(e => e.numerator).join(', '));
+            
+            if (pieNumerators.length > 0 && expressionNumerators.length > 0) {
+                // Match pie chart numerators with expression numerators
+                for (const pieNum of pieNumerators) {
+                    if (usedIndices.has(pieNum.pie.index)) continue;
+                    
+                    for (const exprNum of expressionNumerators) {
+                        if (usedIndices.has(exprNum.num.index)) continue;
+                        
+                        if (pieNum.numerator === exprNum.numerator) {
+                            pairs.push({ first: pieNum.pie, second: exprNum.num });
+                            usedIndices.add(pieNum.pie.index);
+                            usedIndices.add(exprNum.num.index);
+                            LOG('solveMathMatchPairs: found decimal numerator pair:', pieNum.pie.rawValue, '↔', exprNum.num.rawValue, '(numerator:', pieNum.numerator, ')');
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Third try: Match pie chart block count with numbers (e.g., 2 blocks → 10, 4 blocks → 20)
+        // This handles cases where pie charts show block diagrams and numbers represent block values
+        if (pairs.length === 0) {
+            LOG('solveMathMatchPairs: trying block count (numerator) matching mode');
+            
+            // Extract block counts from pie charts (numerator = number of colored sectors/blocks)
+            const pieBlockCounts = pieCharts.map(pie => ({
+                pie: pie,
+                blockCount: pie.fraction ? pie.fraction.numerator : null
+            })).filter(p => p.blockCount !== null);
+            
+            LOG_DEBUG('solveMathMatchPairs: extracted', pieBlockCounts.length, 'pie chart numerators:', 
+                     pieBlockCounts.map(p => p.blockCount).join(', '));
+            LOG_DEBUG('solveMathMatchPairs: available numbers:', 
+                     numbers.map(n => n.numericValue).join(', '));
+            
+            if (pieBlockCounts.length > 0 && numbers.length > 0) {
+                // Try to find a consistent multiplier that relates all block counts to numbers
+                // Strategy: Try all possible multipliers and see which one works for all pairs
+                // First, collect all candidate multipliers from all pie-number pairs
+                const candidateMultipliers = new Map(); // multiplier -> count of pairs that support it
+                
+                // Collect all possible multipliers (only integers)
+                for (const pieBlock of pieBlockCounts) {
+                    for (const num of numbers) {
+                        // Calculate multiplier: num = blockCount * multiplier
+                        const multiplier = num.numericValue / pieBlock.blockCount;
+                        const roundedMultiplier = Math.round(multiplier);
+                        
+                        // Only consider integer multipliers in reasonable range (with tolerance for floating point)
+                        if (multiplier >= 1 && multiplier <= 100 &&
+                            Math.abs(multiplier - roundedMultiplier) < 0.0001 &&
+                            Number.isInteger(roundedMultiplier)) {
+                            const count = candidateMultipliers.get(roundedMultiplier) || 0;
+                            candidateMultipliers.set(roundedMultiplier, count + 1);
+                            LOG_DEBUG('solveMathMatchPairs: candidate multiplier', roundedMultiplier, 
+                                     'for', pieBlock.blockCount, '*', roundedMultiplier, '=', num.numericValue);
+                        }
+                    }
+                }
+                
+                // Sort multipliers by how many pairs support them (descending)
+                const sortedMultipliers = Array.from(candidateMultipliers.entries())
+                    .sort((a, b) => b[1] - a[1])
+                    .map(entry => entry[0]);
+                
+                LOG('solveMathMatchPairs: found candidate multipliers:', sortedMultipliers.join(', '), 
+                    '(sorted by frequency)');
+                
+                // Try each multiplier to see if it works for all pairs
+                for (const multiplier of sortedMultipliers) {
+                    LOG_DEBUG('solveMathMatchPairs: trying multiplier', multiplier);
+                    const tempPairs = [];
+                    const tempUsedIndices = new Set();
+                    
+                    for (const pieBlock of pieBlockCounts) {
+                        if (tempUsedIndices.has(pieBlock.pie.index)) continue;
+                        
+                        let foundMatch = false;
+                        for (const num of numbers) {
+                            if (tempUsedIndices.has(num.index)) continue;
+                            
+                            // Check if this pair matches with current multiplier (with tolerance for floating point)
+                            const expectedValue = pieBlock.blockCount * multiplier;
+                            if (Math.abs(num.numericValue - expectedValue) < 0.0001) {
+                                tempPairs.push({ first: pieBlock.pie, second: num });
+                                tempUsedIndices.add(pieBlock.pie.index);
+                                tempUsedIndices.add(num.index);
+                                foundMatch = true;
+                                LOG_DEBUG('solveMathMatchPairs: matched', pieBlock.blockCount, '*', multiplier, '=', num.numericValue);
+                                break;
+                            }
+                        }
+                        if (!foundMatch) {
+                            LOG_DEBUG('solveMathMatchPairs: no match for pie chart numerator', pieBlock.blockCount, 'with multiplier', multiplier);
+                        }
+                    }
+                    
+                    LOG_DEBUG('solveMathMatchPairs: multiplier', multiplier, 'produced', tempPairs.length, 'pairs (need', pieBlockCounts.length, 'pies and', numbers.length, 'numbers)');
+                    
+                    // If we found pairs for all pie charts, use this multiplier
+                    if (tempPairs.length === pieBlockCounts.length && tempPairs.length === numbers.length) {
+                        pairs.push(...tempPairs);
+                        usedIndices.clear();
+                        tempUsedIndices.forEach(idx => usedIndices.add(idx));
+                        LOG('solveMathMatchPairs: SUCCESS! Found block count pairs with multiplier', multiplier);
+                        for (const pair of tempPairs) {
+                            LOG('solveMathMatchPairs:  →', pair.first.rawValue, '↔', pair.second.rawValue);
+                        }
+                        break;
+                    }
+                }
+                
+                // If no consistent multiplier found, try direct matching (1:1 or simple ratios)
+                // This is a fallback for when not all pie charts/numbers can be matched with one multiplier
+                if (pairs.length === 0) {
+                    LOG_WARN('solveMathMatchPairs: no consistent multiplier found, trying direct block count matching (fallback)');
+                    for (const pieBlock of pieBlockCounts) {
+                        if (usedIndices.has(pieBlock.pie.index)) continue;
+                        
+                        for (const num of numbers) {
+                            if (usedIndices.has(num.index)) continue;
+                            
+                            // Calculate multiplier: num = blockCount * multiplier
+                            const multiplier = num.numericValue / pieBlock.blockCount;
+                            const roundedMultiplier = Math.round(multiplier);
+                            
+                            // Accept if multiplier is a reasonable integer (1-100) with tolerance for floating point
+                            if (multiplier >= 1 && multiplier <= 100 && 
+                                Math.abs(multiplier - roundedMultiplier) < 0.0001 &&
+                                Number.isInteger(roundedMultiplier)) {
+                                pairs.push({ first: pieBlock.pie, second: num });
+                                usedIndices.add(pieBlock.pie.index);
+                                usedIndices.add(num.index);
+                                LOG('solveMathMatchPairs: found block count pair (direct):', pieBlock.blockCount, 'blocks →', num.rawValue, '(multiplier:', roundedMultiplier, ')');
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                LOG_DEBUG('solveMathMatchPairs: cannot try block count matching - pieBlockCounts:', pieBlockCounts.length, ', numbers:', numbers.length);
+            }
+        }
+    }
+    // MODE 3: Match numbers with their factors lists
+    else if (factorsLists.length > 0 && numbers.length > 0) {
+        LOG('solveMathMatchPairs: using factors matching mode');
+        
+        // Helper function to check if all numbers in a list are factors (divisors) of a given number
+        const areAllFactors = (factors, number) => {
+            if (number <= 0) return false;
+            return factors.every(factor => {
+                if (factor <= 0 || factor > number) return false;
+                return number % factor === 0;
+            });
+        };
+        
+        for (const num of numbers) {
+            if (usedIndices.has(num.index)) continue;
+            if (num.numericValue === null || isNaN(num.numericValue)) continue;
+            
+            // Find matching factors list where all factors divide the number
+            for (const factorsList of factorsLists) {
+                if (usedIndices.has(factorsList.index)) continue;
+                
+                if (areAllFactors(factorsList.factors, num.numericValue)) {
+                    pairs.push({ first: num, second: factorsList });
+                    usedIndices.add(num.index);
+                    usedIndices.add(factorsList.index);
+                    LOG('solveMathMatchPairs: found factors pair:', num.rawValue, '↔', factorsList.rawValue, '(factors:', factorsList.factors.join(', '), ')');
+                    break;
+                }
+            }
+        }
     } else {
         // Match compound expressions with simple fractions by numeric value
         // Exclude rounding targets to prevent cross-mode matching errors
         const expressions = tokens.filter(t => t.isExpression && !t.isRoundingTarget);
-        const simpleFractions = tokens.filter(t => !t.isExpression && !t.isRoundingTarget && !t.isPieChart && !t.isBlockDiagram);
+        const simpleFractions = tokens.filter(t => !t.isExpression && !t.isRoundingTarget && !t.isPieChart && !t.isBlockDiagram && !t.isFactorsList);
         
         LOG_DEBUG('solveMathMatchPairs: compound expressions:', expressions.length, ', simple fractions:', simpleFractions.length);
         
@@ -2965,8 +4145,8 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
             }
         } else {
             // Fallback: try to match any tokens with same numeric value but different raw values
-            // Filter out rounding targets to prevent cross-mode matching
-            const fallbackTokens = tokens.filter(t => !t.isRoundingTarget);
+            // Filter out rounding targets and factors lists to prevent cross-mode matching
+            const fallbackTokens = tokens.filter(t => !t.isRoundingTarget && !t.isFactorsList);
             LOG_DEBUG('solveMathMatchPairs: fallback mode - matching by numeric value');
             for (let i = 0; i < fallbackTokens.length; i++) {
                 if (usedIndices.has(fallbackTokens[i].index)) continue;
@@ -2993,9 +4173,30 @@ function solveMathMatchPairs(challengeContainer, tapTokens) {
     
     if (pairs.length === 0) {
         LOG_ERROR('solveMathMatchPairs: no matching pairs found');
+        LOG_ERROR('solveMathMatchPairs: tokens summary - pieCharts:', pieCharts.length, 
+                 ', blockDiagrams:', blockDiagrams.length, ', factorsLists:', factorsLists.length, 
+                 ', numbers:', numbers.length, ', roundingTargets:', roundingTargets.length);
+        
         // Log all token values for debugging
-        for (const t of tokens) {
-            LOG_DEBUG('solveMathMatchPairs: token dump -', t.rawValue, '=', t.numericValue);
+        if (pieCharts.length > 0) {
+            LOG_DEBUG('solveMathMatchPairs: PIE CHARTS:');
+            for (const t of pieCharts) {
+                const numerator = t.fraction ? t.fraction.numerator : '?';
+                const denominator = t.fraction ? t.fraction.denominator : '?';
+                LOG_DEBUG('  -', numerator + '/' + denominator, '=', t.numericValue);
+            }
+        }
+        if (factorsLists.length > 0) {
+            LOG_DEBUG('solveMathMatchPairs: FACTORS LISTS:');
+            for (const t of factorsLists) {
+                LOG_DEBUG('  -', t.rawValue, '→ [' + t.factors.join(', ') + ']');
+            }
+        }
+        if (numbers.length > 0) {
+            LOG_DEBUG('solveMathMatchPairs: NUMBERS:');
+            for (const t of numbers) {
+                LOG_DEBUG('  -', t.rawValue, '=', t.numericValue);
+            }
         }
         return null;
     }
@@ -3040,24 +4241,26 @@ function solveMathExpressionBuild(challengeContainer, iframe) {
         const text = annotation.textContent;
         LOG_DEBUG('solveMathExpressionBuild: checking annotation', text);
         
-        // Look for equations like "\mathbf{12 = \duoblank{3}}" where {3} means 3 blanks
-        if (text && text.includes('\\duoblank')) {
-            equation = text;
-            // Extract the known value from equation
-            // Format: "12 = \duoblank{3}" means we need expression that equals 12
-            // Or: "\duoblank{3} = 12" means we need expression that equals 12
-            const match = text.match(/(\d+)\s*=\s*\\duoblank/);
-            const matchReverse = text.match(/\\duoblank\{(\d+)\}\s*=\s*(\d+)/);
-            
-            if (match) {
-                targetValue = parseInt(match[1]);
-                LOG('solveMathExpressionBuild: found target value (left side):', targetValue);
-            } else if (matchReverse) {
-                targetValue = parseInt(matchReverse[2]);
-                LOG('solveMathExpressionBuild: found target value (right side):', targetValue);
+            // Look for equations like "\mathbf{12 = \duoblank{3}}" where {3} means 3 blanks
+            // Also handles decimals like "\mathbf{2.1 = \duoblank{3}}"
+            if (text && text.includes('\\duoblank')) {
+                equation = text;
+                // Extract the known value from equation
+                // Format: "12 = \duoblank{3}" or "2.1 = \duoblank{3}" means we need expression that equals 12 or 2.1
+                // Or: "\duoblank{3} = 12" or "\duoblank{3} = 2.1" means we need expression that equals 12 or 2.1
+                // Match decimal numbers: \d+\.\d+ or integers: \d+
+                const match = text.match(/(\d+\.?\d*)\s*=\s*\\duoblank/);
+                const matchReverse = text.match(/\\duoblank\{(\d+)\}\s*=\s*(\d+\.?\d*)/);
+                
+                if (match) {
+                    targetValue = parseFloat(match[1]);
+                    LOG('solveMathExpressionBuild: found target value (left side):', targetValue);
+                } else if (matchReverse) {
+                    targetValue = parseFloat(matchReverse[2]);
+                    LOG('solveMathExpressionBuild: found target value (right side):', targetValue);
+                }
+                break;
             }
-            break;
-        }
     }
     
     if (targetValue === null) {
@@ -3107,10 +4310,11 @@ function solveMathExpressionBuild(challengeContainer, iframe) {
                         // Parse individual tokens
                         const tokenParts = tokensStr.split(',').map(t => t.trim());
                         for (const part of tokenParts) {
-                            // renderNumber(X) -> X
-                            const numMatch = part.match(/renderNumber\((\d+)\)/);
+                            // renderNumber(X) -> X (handles both integers and decimals)
+                            const numMatch = part.match(/renderNumber\(([0-9.]+)\)/);
                             if (numMatch) {
-                                tokens.push(parseInt(numMatch[1]));
+                                const numValue = parseFloat(numMatch[1]);
+                                tokens.push(numValue);
                             } else {
                                 // String token like "+" or "-"
                                 const strMatch = part.match(/"([^"]+)"|'([^']+)'/);
@@ -3149,6 +4353,41 @@ function solveMathExpressionBuild(challengeContainer, iframe) {
             }
             
             LOG('solveMathExpressionBuild: found solution - indices:', solution);
+            
+            // Try to use exprBuild.setCellValue if available (similar to FactorTree)
+            if (iframeWindow.exprBuild && typeof iframeWindow.exprBuild.setCellValue === 'function') {
+                LOG_DEBUG('solveMathExpressionBuild: attempting to place tokens using setCellValue');
+                
+                if (iframeDoc) {
+                    const tokenElements = iframeDoc.querySelectorAll('[draggable="true"], .highlighted-symbol, [class*="token"]');
+                    LOG_DEBUG('solveMathExpressionBuild: found', tokenElements.length, 'token elements');
+                    
+                    // Place tokens in slots using setCellValue
+                    // solution contains token indices, we need to place them in entry slots (0-indexed)
+                    for (let slotIndex = 0; slotIndex < solution.length && slotIndex < numEntries; slotIndex++) {
+                        const tokenIndex = solution[slotIndex];
+                        const tokenValue = tokens[tokenIndex];
+                        const tokenElement = tokenElements[tokenIndex];
+                        
+                        if (tokenElement && tokenValue !== undefined) {
+                            try {
+                                // Try 0-based slot index first
+                                iframeWindow.exprBuild.setCellValue(slotIndex, tokenValue, tokenElement);
+                                LOG_DEBUG('solveMathExpressionBuild: setCellValue slot', slotIndex, '=', tokenValue, 'using token index', tokenIndex);
+                            } catch (e) {
+                                LOG_DEBUG('solveMathExpressionBuild: setCellValue failed for slot', slotIndex, ':', e.message);
+                                // Try 1-based index if 0-based fails
+                                try {
+                                    iframeWindow.exprBuild.setCellValue(slotIndex + 1, tokenValue, tokenElement);
+                                    LOG_DEBUG('solveMathExpressionBuild: setCellValue with 1-based index succeeded');
+                                } catch (e2) {
+                                    LOG_DEBUG('solveMathExpressionBuild: setCellValue with 1-based also failed:', e2.message);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             
             // Set the filled_entry_indices in OUTPUT_VARS
             if (outputVars && typeof outputVars === 'object') {
@@ -3215,6 +4454,13 @@ function solveMathExpressionBuild(challengeContainer, iframe) {
 }
 
 /**
+ * Helper function to check if two numbers are approximately equal (for floating point comparison)
+ */
+function approximatelyEqual(a, b, epsilon = 0.0001) {
+    return Math.abs(a - b) < epsilon;
+}
+
+/**
  * Find a combination of tokens that equals the target value
  * Returns array of token indices or null if no solution found
  */
@@ -3233,40 +4479,64 @@ function findExpressionSolution(tokens, numEntries, target) {
         }
     }
     
-    LOG_DEBUG('findExpressionSolution: numbers =', numbers, ', operators =', operators);
+    LOG_DEBUG('findExpressionSolution: numbers =', numbers.map(n => `${n.value}@${n.index}`), ', operators =', operators.map(o => `${o.value}@${o.index}`));
     
     // For numEntries = 1, just find a number that equals target
     if (numEntries === 1) {
         for (const num of numbers) {
-            if (num.value === target) {
+            if (approximatelyEqual(num.value, target)) {
                 return [num.index];
             }
         }
         return null;
     }
     
-    // For numEntries = 3, try all combinations: num1 op num2
-    if (numEntries === 3) {
+    // For numEntries = 3, try multiple patterns:
+    // Pattern 1: num1 op num2 (3 tokens: number, operator, number)
+    for (const num1 of numbers) {
+        for (const op of operators) {
+            for (const num2 of numbers) {
+                if (num1.index === num2.index) continue; // Can't use same token twice
+                
+                let result;
+                switch (op.value) {
+                    case '+': result = num1.value + num2.value; break;
+                    case '-': result = num1.value - num2.value; break;
+                    case '*':
+                    case '×': result = num1.value * num2.value; break;
+                    case '/':
+                    case '÷': 
+                        if (num2.value === 0) continue; // Avoid division by zero
+                        result = num1.value / num2.value; 
+                        break;
+                    default: continue;
+                }
+                
+                LOG_DEBUG('findExpressionSolution: trying pattern num1 op num2:', num1.value, op.value, num2.value, '=', result);
+                
+                if (approximatelyEqual(result, target)) {
+                    LOG('findExpressionSolution: found!', num1.value, op.value, num2.value, '=', target);
+                    return [num1.index, op.index, num2.index];
+                }
+            }
+        }
+    }
+    
+    // Pattern 2: num1 * num2 * num3 (3 number tokens, operators fixed as *)
+    // This handles cases where the expression template is "null * null * null"
+    if (numEntries === 3 && numbers.length >= 3) {
         for (const num1 of numbers) {
-            for (const op of operators) {
-                for (const num2 of numbers) {
-                    if (num1.index === num2.index) continue; // Can't use same token twice
+            for (const num2 of numbers) {
+                if (num2.index === num1.index) continue;
+                for (const num3 of numbers) {
+                    if (num3.index === num1.index || num3.index === num2.index) continue;
                     
-                    let result;
-                    switch (op.value) {
-                        case '+': result = num1.value + num2.value; break;
-                        case '-': result = num1.value - num2.value; break;
-                        case '*':
-                        case '×': result = num1.value * num2.value; break;
-                        case '/':
-                        case '÷': result = num1.value / num2.value; break;
-                    }
+                    const result = num1.value * num2.value * num3.value;
+                    LOG_DEBUG('findExpressionSolution: trying pattern num1 * num2 * num3:', num1.value, '*', num2.value, '*', num3.value, '=', result);
                     
-                    LOG_DEBUG('findExpressionSolution: trying', num1.value, op.value, num2.value, '=', result);
-                    
-                    if (result === target) {
-                        LOG('findExpressionSolution: found!', num1.value, op.value, num2.value, '=', target);
-                        return [num1.index, op.index, num2.index];
+                    if (approximatelyEqual(result, target)) {
+                        LOG('findExpressionSolution: found!', num1.value, '*', num2.value, '*', num3.value, '=', target);
+                        return [num1.index, num2.index, num3.index];
                     }
                 }
             }
@@ -3288,7 +4558,7 @@ function findExpressionSolution(tokens, numEntries, target) {
                             const expr = `${num1.value}${op1.value}${num2.value}${op2.value}${num3.value}`;
                             const result = evaluateMathExpression(expr);
                             
-                            if (result === target) {
+                            if (result !== null && approximatelyEqual(result, target)) {
                                 LOG('findExpressionSolution: found!', expr, '=', target);
                                 return [num1.index, op1.index, num2.index, op2.index, num3.index];
                             }
@@ -3297,6 +4567,62 @@ function findExpressionSolution(tokens, numEntries, target) {
                 }
             }
         }
+    }
+    
+    // Generic recursive approach for other numEntries values
+    // Try all permutations of numEntries tokens
+    if (numEntries > 1 && numEntries !== 3 && numEntries !== 5) {
+        LOG_DEBUG('findExpressionSolution: trying generic recursive approach for numEntries =', numEntries);
+        return findExpressionSolutionRecursive(tokens, numEntries, target, [], new Set());
+    }
+    
+    return null;
+}
+
+/**
+ * Recursive helper to find expression solution for arbitrary numEntries
+ */
+function findExpressionSolutionRecursive(tokens, numEntries, target, currentExpression, usedIndices) {
+    if (currentExpression.length === numEntries) {
+        // Try to evaluate the expression
+        // Build expression string from current tokens
+        let exprStr = '';
+        for (let i = 0; i < currentExpression.length; i++) {
+            const tokenIdx = currentExpression[i];
+            const token = tokens[tokenIdx];
+            if (typeof token === 'number') {
+                exprStr += token;
+            } else {
+                exprStr += token;
+            }
+        }
+        
+        try {
+            const result = evaluateMathExpression(exprStr);
+            if (result !== null && approximatelyEqual(result, target)) {
+                LOG('findExpressionSolutionRecursive: found!', exprStr, '=', target);
+                return currentExpression.slice(); // Return copy
+            }
+        } catch (e) {
+            // Invalid expression, continue
+        }
+        return null;
+    }
+    
+    // Try adding each unused token
+    for (let i = 0; i < tokens.length; i++) {
+        if (usedIndices.has(i)) continue;
+        
+        usedIndices.add(i);
+        currentExpression.push(i);
+        
+        const result = findExpressionSolutionRecursive(tokens, numEntries, target, currentExpression, usedIndices);
+        if (result) {
+            return result;
+        }
+        
+        currentExpression.pop();
+        usedIndices.delete(i);
     }
     
     return null;
@@ -4205,49 +5531,142 @@ function solveFactorTree(challengeContainer, iframe) {
     }
     
     // Find all blank positions in tree (nodes where value is null)
-    // And calculate expected values based on multiplication of children
-    const blanks = []; // {treeIndex, expectedValue}
+    // And calculate expected values based on multiplication/division
+    const blanks = []; // {treeIndex, expectedValue, node}
+    const nodeMap = new Map(); // treeIndex -> node
+    const blankExpectedValues = new Map(); // treeIndex -> expectedValue (for blanks that have been calculated)
     
-    function traverseTree(node, treeIndex) {
+    // Helper function to get the effective value of a node (actual value or calculated expected value)
+    function getEffectiveValue(node, treeIndex) {
+        if (node.value !== null) {
+            return parseFloat(node.value);
+        }
+        // Check if this blank has a calculated expected value
+        return blankExpectedValues.get(treeIndex) || null;
+    }
+    
+    // Post-order traversal: visit children first, then parent
+    // This ensures we calculate child values before parent values
+    function traverseTree(node, treeIndex, parentNode = null) {
         if (!node) return;
         
+        nodeMap.set(treeIndex, node);
+        
+        // First, recursively traverse children (post-order)
+        if (node.left) {
+            traverseTree(node.left, treeIndex * 2, node);
+        }
+        if (node.right) {
+            traverseTree(node.right, treeIndex * 2 + 1, node);
+        }
+        
+        // Now process this node (after children have been processed)
         // If this node is a blank (value is null), calculate expected value
         if (node.value === null) {
-            // For a factor tree: parent = left * right
             let expectedValue = null;
             
-            // Get values of children
-            const leftValue = node.left?.value !== null ? parseFloat(node.left.value) : null;
-            const rightValue = node.right?.value !== null ? parseFloat(node.right.value) : null;
+            // Case 1: If this is a parent node, calculate from children: parent = left * right
+            // Use effective values (actual or calculated expected values)
+            const leftValue = getEffectiveValue(node.left, treeIndex * 2);
+            const rightValue = getEffectiveValue(node.right, treeIndex * 2 + 1);
             
             if (leftValue !== null && rightValue !== null) {
                 expectedValue = leftValue * rightValue;
+                blankExpectedValues.set(treeIndex, expectedValue);
                 LOG_DEBUG('solveFactorTree: blank at index', treeIndex, 'expected value =', leftValue, '*', rightValue, '=', expectedValue);
-            } else {
-                LOG_DEBUG('solveFactorTree: blank at index', treeIndex, 'has incomplete children, leftValue=', leftValue, 'rightValue=', rightValue);
+            } 
+            // Case 2: If this is a child node, calculate from parent and sibling: child = parent / sibling
+            else if (parentNode) {
+                // Get parent's effective value (actual or calculated)
+                const parentTreeIndex = Math.floor(treeIndex / 2);
+                const parentValue = getEffectiveValue(parentNode, parentTreeIndex);
+                
+                if (parentValue !== null) {
+                    // With standard binary tree indexing (left = 2*i, right = 2*i + 1):
+                    // - If treeIndex is even, it's a left child, sibling is right child
+                    // - If treeIndex is odd, it's a right child, sibling is left child
+                    let siblingValue = null;
+                    if (treeIndex % 2 === 0) {
+                        // Even index = left child, check right sibling
+                        siblingValue = getEffectiveValue(parentNode.right, treeIndex + 1);
+                    } else {
+                        // Odd index = right child, check left sibling
+                        siblingValue = getEffectiveValue(parentNode.left, treeIndex - 1);
+                    }
+                    
+                    if (siblingValue !== null && siblingValue !== 0 && parentValue % siblingValue === 0) {
+                        expectedValue = parentValue / siblingValue;
+                        blankExpectedValues.set(treeIndex, expectedValue);
+                        LOG_DEBUG('solveFactorTree: blank at index', treeIndex, 'expected value =', parentValue, '/', siblingValue, '=', expectedValue);
+                    }
+                }
             }
             
             blanks.push({
                 treeIndex: treeIndex,
-                expectedValue: expectedValue
+                expectedValue: expectedValue,
+                node: node
             });
-        }
-        
-        // Recursively traverse children
-        // Left child index = 2 * parentIndex (in 1-based: 2*i)
-        // Right child index = 2 * parentIndex + 1 (in 1-based: 2*i + 1)
-        if (node.left) {
-            traverseTree(node.left, treeIndex * 2);
-        }
-        if (node.right) {
-            traverseTree(node.right, treeIndex * 2 + 1);
         }
     }
     
     // Start traversal from root at index 1
     traverseTree(originalTree, 1);
     
-    LOG_DEBUG('solveFactorTree: found', blanks.length, 'blank(s):', JSON.stringify(blanks));
+    // After post-order traversal, we may need to do additional passes for blanks that couldn't be calculated
+    // because they depend on other blanks. Do iterative refinement until no more values can be calculated.
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const blank of blanks) {
+            if (blank.expectedValue === null) {
+                const node = blank.node;
+                const treeIndex = blank.treeIndex;
+                
+                // Try to calculate from children (they might have been calculated in a previous iteration)
+                const leftValue = getEffectiveValue(node.left, treeIndex * 2);
+                const rightValue = getEffectiveValue(node.right, treeIndex * 2 + 1);
+                
+                if (leftValue !== null && rightValue !== null) {
+                    const newExpectedValue = leftValue * rightValue;
+                    blank.expectedValue = newExpectedValue;
+                    blankExpectedValues.set(treeIndex, newExpectedValue);
+                    changed = true;
+                    LOG_DEBUG('solveFactorTree: blank at index', treeIndex, 'expected value (refined from children) =', leftValue, '*', rightValue, '=', newExpectedValue);
+                } else {
+                    // Try to calculate from parent and sibling (if parent has been calculated)
+                    const parentTreeIndex = Math.floor(treeIndex / 2);
+                    if (parentTreeIndex >= 1) {
+                        const parentNode = nodeMap.get(parentTreeIndex);
+                        if (parentNode) {
+                            const parentValue = getEffectiveValue(parentNode, parentTreeIndex);
+                            
+                            if (parentValue !== null) {
+                                let siblingValue = null;
+                                if (treeIndex % 2 === 0) {
+                                    // Even index = left child, check right sibling
+                                    siblingValue = getEffectiveValue(parentNode.right, treeIndex + 1);
+                                } else {
+                                    // Odd index = right child, check left sibling
+                                    siblingValue = getEffectiveValue(parentNode.left, treeIndex - 1);
+                                }
+                                
+                                if (siblingValue !== null && siblingValue !== 0 && parentValue % siblingValue === 0) {
+                                    const newExpectedValue = parentValue / siblingValue;
+                                    blank.expectedValue = newExpectedValue;
+                                    blankExpectedValues.set(treeIndex, newExpectedValue);
+                                    changed = true;
+                                    LOG_DEBUG('solveFactorTree: blank at index', treeIndex, 'expected value (refined from parent) =', parentValue, '/', siblingValue, '=', newExpectedValue);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    LOG_DEBUG('solveFactorTree: found', blanks.length, 'blank(s):', JSON.stringify(blanks.map(b => ({treeIndex: b.treeIndex, expectedValue: b.expectedValue}))));
     
     // Match tokens to blanks
     // tokenTreeIndices[i] = tree index where token i should go (1-based), or 0 if not used
@@ -4270,13 +5689,133 @@ function solveFactorTree(challengeContainer, iframe) {
     
     LOG('solveFactorTree: solution tokenTreeIndices =', JSON.stringify(tokenTreeIndices));
     
-    // Set the solution in the iframe
+    // Set the solution in the iframe by interacting with FactorTree component
     let success = false;
     try {
         const iframeWindow = iframe.contentWindow;
+        const iframeDoc = iframe.contentDocument;
         
         if (iframeWindow) {
-            // Try getOutputVariables() first
+            // Try to access the FactorTree instance
+            let factorTree = null;
+            if (iframeWindow.factorTree) {
+                factorTree = iframeWindow.factorTree;
+                LOG_DEBUG('solveFactorTree: found factorTree instance');
+            } else {
+                // Try to find it in window scope or other locations
+                LOG_DEBUG('solveFactorTree: factorTree not found in window, trying alternative access');
+            }
+            
+            // If we have a factorTree instance, try to place tokens using its API
+            if (factorTree && typeof factorTree.setCellValue === 'function') {
+                LOG_DEBUG('solveFactorTree: attempting to place tokens using setCellValue');
+                
+                // Find token elements in the DOM
+                const iframeBody = iframeDoc ? iframeDoc.body : null;
+                let tokenElements = [];
+                
+                if (iframeBody) {
+                    // Try to find token elements - they might be in a token bank or similar container
+                    // Look for elements containing the token numbers
+                    for (let i = 0; i < originalTokens.length; i++) {
+                        const tokenValue = originalTokens[i].toString();
+                        const treeIndex = tokenTreeIndices[i];
+                        
+                        if (treeIndex > 0) {
+                            // Try to find the token element
+                            // Tokens might be rendered as text nodes or in specific containers
+                            const allElements = iframeBody.querySelectorAll('*');
+                            let tokenElement = null;
+                            
+                            for (const el of allElements) {
+                                const text = el.textContent || el.innerText || '';
+                                // Check if element contains the token value and is likely a draggable token
+                                if (text.trim() === tokenValue && 
+                                    (el.getAttribute('draggable') === 'true' || 
+                                     el.classList.contains('token') ||
+                                     el.style.cursor === 'grab' ||
+                                     el.style.cursor === 'pointer')) {
+                                    tokenElement = el;
+                                    break;
+                                }
+                            }
+                            
+                            if (tokenElement) {
+                                try {
+                                    // Convert 1-based tree index to 0-based for setCellValue if needed
+                                    // Check if setCellValue expects 0-based or 1-based index
+                                    factorTree.setCellValue(treeIndex - 1, tokenValue, tokenElement);
+                                    LOG_DEBUG('solveFactorTree: placed token', tokenValue, 'at tree index', treeIndex);
+                                } catch (e) {
+                                    LOG_DEBUG('solveFactorTree: setCellValue failed, trying 1-based index:', e.message);
+                                    try {
+                                        factorTree.setCellValue(treeIndex, tokenValue, tokenElement);
+                                        LOG_DEBUG('solveFactorTree: placed token', tokenValue, 'at tree index', treeIndex, '(1-based)');
+                                    } catch (e2) {
+                                        LOG_DEBUG('solveFactorTree: setCellValue with 1-based also failed:', e2.message);
+                                    }
+                                }
+                            } else {
+                                LOG_DEBUG('solveFactorTree: could not find token element for', tokenValue);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Also try directly manipulating the tree structure if factorTree.tree exists
+            if (factorTree && factorTree.tree) {
+                LOG_DEBUG('solveFactorTree: attempting to manipulate tree directly');
+                try {
+                    // Helper function to set value at tree index
+                    function setTreeValue(tree, index, value) {
+                        // Convert 1-based index to path in tree
+                        // Index 1 = root
+                        // Index 2 = left child of root
+                        // Index 3 = right child of root
+                        // Index 4 = left child of index 2, etc.
+                        let path = [];
+                        let idx = index;
+                        while (idx > 1) {
+                            if (idx % 2 === 0) {
+                                path.unshift('left');
+                                idx = idx / 2;
+                            } else {
+                                path.unshift('right');
+                                idx = (idx - 1) / 2;
+                            }
+                        }
+                        
+                        let node = tree;
+                        for (const dir of path) {
+                            if (!node[dir]) node[dir] = {};
+                            node = node[dir];
+                        }
+                        node.value = value;
+                    }
+                    
+                    // Place tokens in the tree
+                    for (let i = 0; i < originalTokens.length; i++) {
+                        const treeIndex = tokenTreeIndices[i];
+                        if (treeIndex > 0) {
+                            const tokenValue = originalTokens[i].toString();
+                            setTreeValue(factorTree.tree, treeIndex, tokenValue);
+                            LOG_DEBUG('solveFactorTree: set tree value at index', treeIndex, 'to', tokenValue);
+                        }
+                    }
+                    
+                    // Trigger update subscriber if it exists
+                    if (typeof factorTree.notifyUpdate === 'function') {
+                        factorTree.notifyUpdate();
+                    } else if (typeof factorTree.update === 'function') {
+                        factorTree.update();
+                    }
+                } catch (e) {
+                    LOG_DEBUG('solveFactorTree: direct tree manipulation failed:', e.message);
+                }
+            }
+            
+            // Set OUTPUT_VARS immediately as fallback
             if (typeof iframeWindow.getOutputVariables === 'function') {
                 const vars = iframeWindow.getOutputVariables();
                 if (vars && 'tokenTreeIndices' in vars) {
@@ -4293,21 +5832,59 @@ function solveFactorTree(challengeContainer, iframe) {
                 success = true;
             }
             
-            // Trigger callbacks
-            if (typeof iframeWindow.postOutputVariables === 'function') {
-                iframeWindow.postOutputVariables();
-                LOG_DEBUG('solveFactorTree: called postOutputVariables()');
-            }
+            // Wait a bit for the tree to update (if we manipulated it), then trigger callbacks and check button
+            setTimeout(() => {
+                try {
+                    // Trigger callbacks
+                    if (typeof iframeWindow.postOutputVariables === 'function') {
+                        iframeWindow.postOutputVariables();
+                        LOG_DEBUG('solveFactorTree: called postOutputVariables()');
+                    }
+                    
+                    if (iframeWindow.duo && typeof iframeWindow.duo.onFirstInteraction === 'function') {
+                        iframeWindow.duo.onFirstInteraction();
+                        LOG_DEBUG('solveFactorTree: called duo.onFirstInteraction()');
+                    }
+                    
+                    if (iframeWindow.duoDynamic && typeof iframeWindow.duoDynamic.onInteraction === 'function') {
+                        iframeWindow.duoDynamic.onInteraction();
+                        LOG_DEBUG('solveFactorTree: called duoDynamic.onInteraction()');
+                    }
+                    
+                    // Try to find and click the Check button
+                    if (iframeDoc) {
+                        const checkButton = iframeDoc.querySelector('button[aria-label*="Check"], button[aria-label*="check"]') ||
+                                          Array.from(iframeDoc.querySelectorAll('button')).find(btn => {
+                                              const text = (btn.textContent || '').toLowerCase();
+                                              const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+                                              return text.includes('check') || ariaLabel.includes('check');
+                                          });
+                        
+                        if (checkButton) {
+                            LOG_DEBUG('solveFactorTree: found Check button in iframe, clicking it');
+                            checkButton.click();
+                        } else {
+                            LOG_DEBUG('solveFactorTree: Check button not found in iframe');
+                        }
+                    }
+                    
+                    // Also check in parent document for Check button
+                    const parentCheckButton = challengeContainer.querySelector('button[aria-label*="Check"], button[aria-label*="check"]') ||
+                                            Array.from(challengeContainer.querySelectorAll('button')).find(btn => {
+                                                const text = (btn.textContent || '').toLowerCase();
+                                                const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+                                                return text.includes('check') || ariaLabel.includes('check');
+                                            });
+                    
+                    if (parentCheckButton) {
+                        LOG_DEBUG('solveFactorTree: found Check button in parent, clicking it');
+                        parentCheckButton.click();
+                    }
+                } catch (e) {
+                    LOG_ERROR('solveFactorTree: error in setTimeout callback:', e.message);
+                }
+            }, 200);
             
-            if (iframeWindow.duo && typeof iframeWindow.duo.onFirstInteraction === 'function') {
-                iframeWindow.duo.onFirstInteraction();
-                LOG_DEBUG('solveFactorTree: called duo.onFirstInteraction()');
-            }
-            
-            if (iframeWindow.duoDynamic && typeof iframeWindow.duoDynamic.onInteraction === 'function') {
-                iframeWindow.duoDynamic.onInteraction();
-                LOG_DEBUG('solveFactorTree: called duoDynamic.onInteraction()');
-            }
         }
     } catch (e) {
         LOG_ERROR('solveFactorTree: error setting solution:', e.message);
@@ -4394,22 +5971,133 @@ function solveMathPatternTable(challengeContainer, patternTable) {
         return null;
     }
     
+    // Analyze pattern from existing rows to understand how visualizations map to values
+    // Extract block counts from visualizations in result cells (if any)
+    const patternBlockCounts = [];
+    for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+        const row = rows[rowIdx];
+        // The result cell is the second cell in each row pair (cells[rowIdx * 2 + 1])
+        const resultCellIndex = rowIdx * 2 + 1;
+        if (resultCellIndex < cells.length) {
+            const resultCell = cells[resultCellIndex];
+            const resultIframe = resultCell.querySelector('iframe[title="Math Web Element"]');
+            if (resultIframe) {
+                const resultSrcdoc = resultIframe.getAttribute('srcdoc');
+                if (resultSrcdoc) {
+                    const blockCount = extractBlockDiagramValue(resultSrcdoc);
+                    if (blockCount !== null) {
+                        const rowAnswer = evaluateMathExpression(row.expression);
+                        patternBlockCounts.push({
+                            expression: row.expression,
+                            answer: rowAnswer,
+                            blockCount: blockCount
+                        });
+                        LOG('solveMathPatternTable: pattern row - expression:', row.expression, ', answer:', rowAnswer, ', blocks:', blockCount);
+                    }
+                }
+            }
+        }
+    }
+    
     // Find the correct choice
     const choices = challengeContainer.querySelectorAll(CHALLENGE_CHOICE);
     LOG('solveMathPatternTable: found', choices.length, 'choices');
     
     let correctChoiceIndex = -1;
+    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
     
+    // First, try to match by KaTeX value (numbers)
     for (let i = 0; i < choices.length; i++) {
         const choiceValue = extractKatexValue(choices[i]);
         LOG('solveMathPatternTable: choice', i, '- value:', choiceValue);
         
         // Compare as numbers
         const choiceNum = parseFloat(choiceValue);
-        if (!isNaN(choiceNum) && choiceNum === answer) {
+        if (!isNaN(choiceNum) && (choiceNum === answer || approximatelyEqual(choiceNum, answer))) {
             correctChoiceIndex = i;
-            LOG('solveMathPatternTable: found matching choice at index', i);
+            LOG('solveMathPatternTable: found matching choice at index', i, '(by number)');
             break;
+        }
+    }
+    
+    // If no match by number, try to match by visual representation (block diagrams)
+    if (correctChoiceIndex === -1) {
+        LOG('solveMathPatternTable: no number match, trying visual representations');
+        
+        // Determine expected block count based on pattern or calculation
+        let expectedBlockCount = null;
+        
+        // If we have pattern data, try to infer the mapping
+        if (patternBlockCounts.length > 0) {
+            // Check if pattern shows that block count equals numerator
+            const allMatchNumerator = patternBlockCounts.every(p => {
+                const numerator = parseFloat(p.expression.split('÷')[0] || p.expression.split('/')[0] || '0');
+                return p.blockCount === numerator;
+            });
+            
+            if (allMatchNumerator) {
+                const questionNumerator = parseFloat(questionExpression.split('÷')[0] || questionExpression.split('/')[0] || '0');
+                expectedBlockCount = questionNumerator;
+                LOG('solveMathPatternTable: pattern indicates block count = numerator, expected:', expectedBlockCount);
+            } else {
+                // Check if block count equals answer * 100
+                const allMatchAnswerTimes100 = patternBlockCounts.every(p => {
+                    return approximatelyEqual(p.blockCount, (p.answer || 0) * 100);
+                });
+                
+                if (allMatchAnswerTimes100) {
+                    expectedBlockCount = answer * 100;
+                    LOG('solveMathPatternTable: pattern indicates block count = answer * 100, expected:', expectedBlockCount);
+                }
+            }
+        }
+        
+        // If no pattern match, try common mappings
+        if (expectedBlockCount === null) {
+            const numerator = parseFloat(questionExpression.split('÷')[0] || questionExpression.split('/')[0] || '0');
+            const answerTimes100 = answer * 100;
+            
+            // For division patterns, try numerator first (most common)
+            if (numerator > 0 && numerator <= 100) {
+                expectedBlockCount = numerator;
+            } else if (answerTimes100 > 0 && answerTimes100 <= 100) {
+                expectedBlockCount = answerTimes100;
+            }
+        }
+        
+        // Try to match by counting blocks in iframe visualizations
+        for (let i = 0; i < choices.length; i++) {
+            const choice = choices[i];
+            const choiceIframe = choice.querySelector('iframe[title="Math Web Element"]');
+            
+            if (choiceIframe) {
+                const choiceSrcdoc = choiceIframe.getAttribute('srcdoc');
+                if (choiceSrcdoc) {
+                    const blockCount = extractBlockDiagramValue(choiceSrcdoc);
+                    LOG('solveMathPatternTable: choice', i, '- block count:', blockCount);
+                    
+                    if (blockCount !== null) {
+                        // Match if block count matches expected value
+                        if (expectedBlockCount !== null && blockCount === expectedBlockCount) {
+                            correctChoiceIndex = i;
+                            LOG('solveMathPatternTable: found matching choice at index', i, '(by block count:', blockCount, ', expected:', expectedBlockCount, ')');
+                            break;
+                        }
+                        
+                        // Fallback: try common mappings
+                        const numerator = parseFloat(questionExpression.split('÷')[0] || questionExpression.split('/')[0] || '0');
+                        const answerTimes100 = answer * 100;
+                        
+                        if (blockCount === numerator || 
+                            approximatelyEqual(blockCount, answerTimes100) ||
+                            approximatelyEqual(blockCount, answer)) {
+                            correctChoiceIndex = i;
+                            LOG('solveMathPatternTable: found matching choice at index', i, '(by block count:', blockCount, ', fallback match)');
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
     

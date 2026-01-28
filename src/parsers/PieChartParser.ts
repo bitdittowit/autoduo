@@ -151,6 +151,13 @@ export function extractPieChartFraction(svgContent: string | null): ISimplifiedF
 export function isPieChart(svgContent: string): boolean {
     if (!svgContent) return false;
 
+    // First, exclude block diagrams (they have rect elements)
+    const hasRects = /<rect[^>]*>/i.test(svgContent);
+    if (hasRects) {
+        // Block diagrams have rects, pie charts don't
+        return false;
+    }
+
     // Pie charts typically have colored paths or circles
     const hasColoredPaths = /#(?:49C0F8|1CB0F6)/i.test(svgContent);
     const hasCircle = /<circle/i.test(svgContent);

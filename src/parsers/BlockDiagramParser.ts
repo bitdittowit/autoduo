@@ -48,6 +48,8 @@ function countHundredBlocks(svgContent: string): number {
 
 /**
  * Подсчитывает обычные блоки (rect и простые path без clip-rule)
+ * Each column of 10 blocks has: 2 <path> (top/bottom rounded) + 8 <rect> (middle) = 10 total
+ * So we count ALL elements (rect + simple path), and each element = 1 block
  */
 function countRegularBlocks(svgContent: string): number {
     let count = 0;
@@ -97,6 +99,8 @@ export function extractBlockDiagramValue(srcdoc: string): number | null {
     }
 
     // Count regular blocks
+    // Each column of 10 blocks has: 2 <path> (top/bottom rounded) + 8 <rect> (middle) = 10 total
+    // So we count ALL elements (rect + simple path), and each element = 1 block
     const regularBlocks = countRegularBlocks(svgContent);
 
     if (regularBlocks > 0) {

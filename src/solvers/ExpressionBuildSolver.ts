@@ -143,35 +143,104 @@ export class ExpressionBuildSolver extends BaseSolver {
             const iframeDoc =
                 iframe.contentDocument ?? iframeWindow?.document ?? null;
 
-            // Try to access exprBuild directly
+            // Method 1: Try to access exprBuild directly from window
             if (iframeWindow?.exprBuild) {
                 const windowTokens = iframeWindow.tokens ?? [];
-                tokens.push(...windowTokens);
-                numEntries = iframeWindow.exprBuild.entries?.length ?? 0;
+                if (windowTokens.length > 0) {
+                    tokens.push(...windowTokens);
+                    numEntries = iframeWindow.exprBuild.entries?.length ?? 0;
+                    this.logDebug('extracted tokens from window.exprBuild');
+                }
             }
 
-            // If not found, parse from script content
+            // Method 2: Try accessing tokens via window.tokens or window.mathDiagram
+            if (tokens.length === 0 && iframeWindow) {
+                try {
+                    const win = iframeWindow as unknown as Record<string, unknown>;
+                    if (Array.isArray(win.tokens)) {
+                        tokens.push(...(win.tokens as (number | string)[]));
+                        this.logDebug('extracted tokens from window.tokens');
+                    }
+                    // Check mathDiagram object
+                    const mathDiagram = win.mathDiagram as { tokens?: (number | string)[] } | undefined;
+                    if (mathDiagram?.tokens && Array.isArray(mathDiagram.tokens)) {
+                        tokens.push(...mathDiagram.tokens);
+                        this.logDebug('extracted tokens from window.mathDiagram.tokens');
+                    }
+                } catch {
+                    // Cross-origin or access denied, continue to next method
+                }
+            }
+
+            // Method 3: Parse from script content (more robust patterns)
             if (tokens.length === 0 && iframeDoc) {
                 const scripts = iframeDoc.querySelectorAll('script');
+                const allScriptContent = Array.from(scripts)
+                    .map(s => s.textContent ?? '')
+                    .join('\n');
 
-                for (const script of scripts) {
-                    const content = script.textContent ?? '';
+                // Try multiple token patterns
+                const tokenPatterns = [
+                    /const\s+tokens\s*=\s*\[(.*?)\];/s,
+                    /let\s+tokens\s*=\s*\[(.*?)\];/s,
+                    /var\s+tokens\s*=\s*\[(.*?)\];/s,
+                    /tokens\s*=\s*\[(.*?)\];/s,
+                    /window\.tokens\s*=\s*\[(.*?)\];/s,
+                ];
 
-                    // Parse tokens array
-                    const tokensMatch = content.match(
-                        /const\s+tokens\s*=\s*\[(.*?)\];/s,
-                    );
+                for (const pattern of tokenPatterns) {
+                    const tokensMatch = allScriptContent.match(pattern);
                     if (tokensMatch?.[1]) {
                         this.parseTokensString(tokensMatch[1], tokens);
+                        if (tokens.length > 0) {
+                            this.logDebug('extracted tokens from script pattern:', pattern.toString());
+                            break;
+                        }
                     }
+                }
 
-                    // Parse entries count
-                    const entriesMatch = content.match(
-                        /entries:\s*\[(null,?\s*)+\]/,
-                    );
+                // Parse entries count with multiple patterns
+                const entriesPatterns = [
+                    /entries:\s*\[(null,?\s*)+\]/,
+                    /entries\s*:\s*\[(null,?\s*)+\]/,
+                    /entries\s*=\s*\[(null,?\s*)+\]/,
+                ];
+
+                for (const pattern of entriesPatterns) {
+                    const entriesMatch = allScriptContent.match(pattern);
                     if (entriesMatch) {
                         const nullMatches = entriesMatch[0].match(/null/g);
                         numEntries = nullMatches?.length ?? 0;
+                        if (numEntries > 0) {
+                            this.logDebug('extracted numEntries from script:', numEntries);
+                            break;
+                        }
+                    }
+                }
+
+                // Fallback: try to infer numEntries from exprBuild structure
+                if (numEntries === 0) {
+                    const exprBuildMatch = allScriptContent.match(/exprBuild\s*:\s*\{[^}]*entries\s*:\s*\[(.*?)\]/s);
+                    if (exprBuildMatch?.[1]) {
+                        const nullMatches = exprBuildMatch[1].match(/null/g);
+                        numEntries = nullMatches?.length ?? 0;
+                    }
+                }
+            }
+
+            // Method 4: If still no tokens, check nested iframes (for NumberLine cases)
+            if (tokens.length === 0 && iframeDoc) {
+                const nestedIframes = iframeDoc.querySelectorAll('iframe');
+                for (const nestedIframe of nestedIframes) {
+                    try {
+                        const nestedWindow = (nestedIframe as HTMLIFrameElement).contentWindow as IIframeWindow | null;
+                        if (nestedWindow?.tokens && Array.isArray(nestedWindow.tokens)) {
+                            tokens.push(...nestedWindow.tokens);
+                            this.logDebug('extracted tokens from nested iframe');
+                            break;
+                        }
+                    } catch {
+                        // Cross-origin, skip
                     }
                 }
             }
@@ -179,6 +248,7 @@ export class ExpressionBuildSolver extends BaseSolver {
             this.logError('error extracting tokens:', e);
         }
 
+        this.logDebug('final tokens:', tokens, 'numEntries:', numEntries);
         return { tokens, numEntries };
     }
 
@@ -186,20 +256,65 @@ export class ExpressionBuildSolver extends BaseSolver {
         tokensStr: string,
         tokens: (number | string)[],
     ): void {
-        const tokenParts = tokensStr.split(',').map(t => t.trim());
+        // Remove comments and clean up
+        const cleaned = tokensStr.replace(/\/\/.*$/gm, '').trim();
+
+        // Split by comma, but be careful with nested structures
+        const tokenParts: string[] = [];
+        let current = '';
+        let depth = 0;
+
+        for (const char of cleaned) {
+            if (char === '(' || char === '[' || char === '{') {
+                depth++;
+                current += char;
+            } else if (char === ')' || char === ']' || char === '}') {
+                depth--;
+                current += char;
+            } else if (char === ',' && depth === 0) {
+                tokenParts.push(current.trim());
+                current = '';
+            } else {
+                current += char;
+            }
+        }
+        if (current.trim()) {
+            tokenParts.push(current.trim());
+        }
 
         for (const part of tokenParts) {
-            // renderNumber(X) -> X
-            const numMatch = part.match(/renderNumber\((\d+)\)/);
+            const trimmed = part.trim();
+            if (!trimmed) continue;
+
+            // Pattern 1: renderNumber(X) -> X
+            const numMatch = trimmed.match(/renderNumber\((\d+)\)/);
             if (numMatch?.[1]) {
                 tokens.push(parseInt(numMatch[1], 10));
-            } else {
-                // String token like "+" or "-"
-                const strMatch = part.match(/"([^"]+)"|'([^']+)'/);
-                if (strMatch) {
-                    tokens.push(strMatch[1] ?? strMatch[2] ?? '');
-                }
+                continue;
             }
+
+            // Pattern 2: Just a number
+            const plainNumMatch = trimmed.match(/^(\d+)$/);
+            if (plainNumMatch?.[1]) {
+                tokens.push(parseInt(plainNumMatch[1], 10));
+                continue;
+            }
+
+            // Pattern 3: String token like "+" or "-"
+            const strMatch = trimmed.match(/"([^"]+)"|'([^']+)'/);
+            if (strMatch) {
+                tokens.push(strMatch[1] ?? strMatch[2] ?? '');
+                continue;
+            }
+
+            // Pattern 4: String without quotes (like + or -)
+            if (['+', '-', '*', '/', '×', '÷'].includes(trimmed)) {
+                tokens.push(trimmed);
+                continue;
+            }
+
+            // Log unparsed tokens for debugging
+            this.logDebug('could not parse token:', trimmed);
         }
     }
 

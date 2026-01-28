@@ -3,7 +3,7 @@
  */
 
 import { logger } from '../utils/logger';
-import { delay, clickContinueButton } from '../dom/interactions';
+import { delay, clickContinueButtonAsync } from '../dom/interactions';
 import {
     detectChallenge,
     isOnResultScreen,
@@ -87,7 +87,7 @@ export class AutoRunner {
                 // Check if on result screen (lesson complete)
                 if (isOnResultScreen()) {
                     logger.info('AutoRunner: lesson complete, looking for next...');
-                    const clicked = clickContinueButton();
+                    const clicked = await clickContinueButtonAsync(5000);
                     if (!clicked) {
                         stuckCounter++;
                         logger.warn(`AutoRunner: cannot click continue (attempt ${stuckCounter}/${maxStuckAttempts})`);
@@ -124,7 +124,7 @@ export class AutoRunner {
                         this.stop();
                         break;
                     }
-                    const clicked = clickContinueButton();
+                    const clicked = await clickContinueButtonAsync(5000);
                     if (!clicked) {
                         stuckCounter++;
                         if (stuckCounter >= maxStuckAttempts) {
@@ -149,8 +149,13 @@ export class AutoRunner {
                     this.solvedCount++;
                     await delay(this.config.delayAfterSolve);
 
-                    // Click continue/check button
-                    clickContinueButton();
+                    // Click continue/check button (wait for it to become enabled)
+                    const clicked = await clickContinueButtonAsync(5000);
+                    if (!clicked) {
+                        logger.warn('AutoRunner: continue button not clicked (may be disabled or not found)');
+                        // Don't increment stuck counter here - the challenge was solved,
+                        // just the button might need more time
+                    }
                     await delay(this.config.delayBetweenActions);
                 } else {
                     // No challenge found or couldn't solve, wait and retry

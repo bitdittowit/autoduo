@@ -10,6 +10,7 @@ import { extractPieChartFraction } from '../parsers/PieChartParser';
 import { extractBlockDiagramValue, isBlockDiagram } from '../parsers/BlockDiagramParser';
 import { evaluateMathExpression } from '../math/expressions';
 import { roundToNearest } from '../math/rounding';
+import { findAllIframes } from '../dom/selectors';
 
 interface IToken {
     index: number;
@@ -33,8 +34,26 @@ export class MatchPairsSolver extends BaseSolver {
     readonly name = 'MatchPairsSolver';
 
     canSolve(context: IChallengeContext): boolean {
-        // Match pairs have tap tokens and usually "Match" in header
-        const hasHeader = this.headerContains(context, 'match', 'pair');
+        // Match pairs require a specific header
+        const hasHeader = this.headerContains(context, 'match', 'pair') ||
+            this.headerContains(context, 'match', 'equivalent');
+
+        if (!hasHeader) {
+            // Without a specific header, don't match (to avoid false positives)
+            return false;
+        }
+
+        // Exclude if there's a NumberLine slider (those use InteractiveSliderSolver)
+        const allIframes = findAllIframes(context.container);
+        for (const iframe of allIframes) {
+            const srcdoc = iframe.getAttribute('srcdoc');
+            if (srcdoc?.includes('NumberLine')) {
+                // Exclude ExpressionBuild components
+                if (!srcdoc.includes('exprBuild') && !srcdoc.includes('ExpressionBuild')) {
+                    return false; // This is a slider challenge, not a match pairs challenge
+                }
+            }
+        }
 
         // Check for tap token elements specifically (both variants)
         const tapTokens = context.container.querySelectorAll(
@@ -47,11 +66,8 @@ export class MatchPairsSolver extends BaseSolver {
             token => token.getAttribute('aria-disabled') !== 'true',
         );
 
-        // Return true if:
-        // 1. Has header indicating match pairs, OR
-        // 2. Has at least 4 tap tokens (typical match pairs challenge)
-        // AND has at least 2 active tokens (can form at least one pair)
-        return (hasHeader || tapTokens.length >= 4) && activeTokens.length >= 2;
+        // Require header AND at least 2 active tokens
+        return activeTokens.length >= 2;
     }
 
     solve(context: IChallengeContext): ISolverResult | null {

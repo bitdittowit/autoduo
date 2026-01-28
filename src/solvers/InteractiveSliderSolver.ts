@@ -41,19 +41,103 @@ export class InteractiveSliderSolver extends BaseSolver {
 
     canSolve(context: IChallengeContext): boolean {
         // Check for iframe with NumberLine
+        // Try both the standard method and a broader search
         const allIframes = findAllIframes(context.container);
 
-        for (const iframe of allIframes) {
+        // Also check all iframes in the container as fallback
+        const allIframesFallback = context.container.querySelectorAll<HTMLIFrameElement>('iframe');
+        const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+
+        let hasNumberLine = false;
+        let hasVisualElement = false;
+        let hasNumberLineInExpressionBuild = false;
+        const headerText = this.getHeaderText(context);
+        const isShowAnotherWay = headerText.includes('show') && headerText.includes('another');
+
+        this.log(
+            'checking',
+            combinedIframes.length,
+            'iframes (standard:',
+            allIframes.length,
+            'fallback:',
+            allIframesFallback.length,
+            ')',
+        );
+
+        for (const iframe of combinedIframes) {
             const srcdoc = iframe.getAttribute('srcdoc');
-            if (srcdoc?.includes('NumberLine')) {
-                // Exclude if this is an ExpressionBuild component
-                if (srcdoc.includes('exprBuild') || srcdoc.includes('ExpressionBuild')) {
-                    continue;
+            if (!srcdoc) {
+                // Check if iframe has src that might contain NumberLine
+                const src = iframe.getAttribute('src');
+                if (src?.includes('NumberLine')) {
+                    this.log('found NumberLine in src attribute');
+                    hasNumberLine = true;
                 }
-                return true;
+                continue;
+            }
+
+            // Check for NumberLine
+            if (srcdoc.includes('NumberLine')) {
+                // Check if this is an ExpressionBuild component
+                const isExpressionBuild =
+                    srcdoc.includes('exprBuild') || srcdoc.includes('ExpressionBuild');
+
+                if (isExpressionBuild) {
+                    // For "Show this another way" challenges with block diagram,
+                    // NumberLine can be in ExpressionBuild iframe, but it's still a slider challenge
+                    if (isShowAnotherWay) {
+                        this.log(
+                            'found NumberLine in ExpressionBuild iframe, but header suggests slider challenge',
+                        );
+                        hasNumberLineInExpressionBuild = true;
+                    } else {
+                        this.log('skipping ExpressionBuild NumberLine (not show another way)');
+                        continue;
+                    }
+                } else {
+                    hasNumberLine = true;
+                    this.log('found NumberLine iframe');
+                }
+            }
+
+            // Check for visual element (block diagram or pie chart)
+            if (srcdoc.includes('<svg')) {
+                if (isBlockDiagram(srcdoc)) {
+                    hasVisualElement = true;
+                    this.log('found block diagram iframe');
+                } else if (srcdoc.includes('circle') || srcdoc.includes('path')) {
+                    // Could be a pie chart
+                    hasVisualElement = true;
+                    this.log('found potential pie chart iframe');
+                }
             }
         }
 
+        this.log(
+            'hasNumberLine:',
+            hasNumberLine,
+            'hasVisualElement:',
+            hasVisualElement,
+            'hasNumberLineInExpressionBuild:',
+            hasNumberLineInExpressionBuild,
+            'header:',
+            headerText,
+        );
+
+        // Special case: "Show this another way" with block diagram + NumberLine slider
+        // Even if NumberLine is in ExpressionBuild iframe, it's still a slider challenge
+        if (isShowAnotherWay && hasVisualElement && (hasNumberLine || hasNumberLineInExpressionBuild)) {
+            this.log('can solve: Show another way with visual element and NumberLine');
+            return true;
+        }
+
+        // If we have NumberLine (not in ExpressionBuild), we can solve it
+        if (hasNumberLine) {
+            this.log('can solve: NumberLine found');
+            return true;
+        }
+
+        this.log('cannot solve: no NumberLine found');
         return false;
     }
 
@@ -61,13 +145,19 @@ export class InteractiveSliderSolver extends BaseSolver {
         this.log('starting');
 
         const allIframes = findAllIframes(context.container);
+        // Also check all iframes as fallback
+        const allIframesFallback = context.container.querySelectorAll<HTMLIFrameElement>('iframe');
+        const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+
         let targetValue: number | null = null;
         let equation: string | null = null;
         let sliderIframe: HTMLIFrameElement | null = null;
+        const headerText = this.getHeaderText(context);
+        const isShowAnotherWay = headerText.includes('show') && headerText.includes('another');
 
         // Find visual element (block diagram or pie chart) + slider combination
-        if (allIframes.length >= 2) {
-            const visualIframe = findIframeByContent(allIframes, '<svg');
+        if (combinedIframes.length >= 1) {
+            const visualIframe = findIframeByContent(combinedIframes, '<svg');
             if (visualIframe) {
                 const visualSrcdoc = visualIframe.getAttribute('srcdoc');
                 if (visualSrcdoc) {
@@ -93,11 +183,20 @@ export class InteractiveSliderSolver extends BaseSolver {
                 }
 
                 // Find the slider iframe
-                for (const ifrm of allIframes) {
-                    if (ifrm !== visualIframe) {
-                        const srcdoc = ifrm.getAttribute('srcdoc');
-                        if (srcdoc?.includes('NumberLine')) {
+                // For "Show this another way" challenges, NumberLine might be in ExpressionBuild iframe
+                for (const ifrm of combinedIframes) {
+                    if (ifrm === visualIframe) continue;
+
+                    const srcdoc = ifrm.getAttribute('srcdoc');
+                    if (!srcdoc) continue;
+
+                    if (srcdoc.includes('NumberLine')) {
+                        // For "Show this another way", accept NumberLine even in ExpressionBuild iframe
+                        const isExpressionBuild =
+                            srcdoc.includes('exprBuild') || srcdoc.includes('ExpressionBuild');
+                        if (isShowAnotherWay || !isExpressionBuild) {
                             sliderIframe = ifrm;
+                            this.log('found slider iframe (NumberLine)');
                             break;
                         }
                     }
@@ -139,7 +238,18 @@ export class InteractiveSliderSolver extends BaseSolver {
 
         // Find slider iframe if not found yet
         if (!sliderIframe) {
-            sliderIframe = findIframeByContent(allIframes, 'NumberLine');
+            sliderIframe = findIframeByContent(combinedIframes, 'NumberLine');
+            // Also check ExpressionBuild iframes for "Show this another way" challenges
+            if (!sliderIframe && isShowAnotherWay) {
+                for (const ifrm of combinedIframes) {
+                    const srcdoc = ifrm.getAttribute('srcdoc');
+                    if (srcdoc?.includes('NumberLine')) {
+                        sliderIframe = ifrm;
+                        this.log('found slider iframe in ExpressionBuild (Show another way)');
+                        break;
+                    }
+                }
+            }
         }
 
         if (!sliderIframe) {

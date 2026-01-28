@@ -310,7 +310,8 @@ var AutoDuo = (function (exports) {
         input.dispatchEvent(inputEvent);
     }
     /**
-     * Кликает кнопку продолжения/проверки
+     * Кликает кнопку продолжения/проверки (синхронная версия)
+     * @returns true если кнопка была нажата успешно
      */
     function clickContinueButton() {
         const selectors = [
@@ -322,7 +323,9 @@ var AutoDuo = (function (exports) {
             if (button) {
                 // Check both disabled property and aria-disabled attribute
                 const isDisabled = button.disabled ||
-                    button.getAttribute('aria-disabled') === 'true';
+                    button.getAttribute('aria-disabled') === 'true' ||
+                    button.classList.contains('disabled') ||
+                    button.style.pointerEvents === 'none';
                 if (!isDisabled) {
                     click(button);
                     return true;
@@ -330,6 +333,137 @@ var AutoDuo = (function (exports) {
             }
         }
         return false;
+    }
+    /**
+     * Асинхронная версия clickContinueButton с ожиданием
+     * Использует MutationObserver для отслеживания изменений состояния кнопки
+     */
+    async function clickContinueButtonAsync(maxWaitMs = 5000, checkInterval = 50) {
+        const selectors = [
+            '[data-test="player-next"]',
+            'button[data-test="player-next"]',
+        ];
+        const findButton = () => {
+            for (const selector of selectors) {
+                const button = document.querySelector(selector);
+                if (button) {
+                    return button;
+                }
+            }
+            return null;
+        };
+        const isButtonEnabled = (button) => {
+            const isDisabled = button.disabled ||
+                button.getAttribute('aria-disabled') === 'true' ||
+                button.classList.contains('disabled') ||
+                button.style.pointerEvents === 'none';
+            return !isDisabled;
+        };
+        const startTime = Date.now();
+        let button = findButton();
+        // If button is already enabled, click immediately
+        if (button && isButtonEnabled(button)) {
+            logger.debug('clickContinueButtonAsync: button already enabled, clicking immediately');
+            click(button);
+            return true;
+        }
+        if (!button) {
+            logger.debug('clickContinueButtonAsync: button not found, waiting...');
+        }
+        else {
+            logger.debug('clickContinueButtonAsync: button found but disabled, waiting for enable...');
+        }
+        // Use Promise to coordinate between observer and polling
+        let resolvePromise = null;
+        const clickPromise = new Promise((resolve) => {
+            resolvePromise = resolve;
+        });
+        let observer = null;
+        let clicked = false;
+        const tryClick = (btn) => {
+            if (clicked || !btn)
+                return false;
+            if (isButtonEnabled(btn)) {
+                clicked = true;
+                logger.debug('clickContinueButtonAsync: button enabled, clicking');
+                if (observer) {
+                    observer.disconnect();
+                    observer = null;
+                }
+                click(btn);
+                if (resolvePromise) {
+                    resolvePromise(true);
+                }
+                return true;
+            }
+            return false;
+        };
+        // Set up MutationObserver to watch for button state changes
+        // Also observe document body in case button appears later
+        const observeTarget = button?.parentElement ?? document.body;
+        observer = new MutationObserver(() => {
+            if (clicked)
+                return;
+            const currentButton = findButton();
+            if (currentButton) {
+                // If button wasn't found before, set up observation on it
+                if (!button && currentButton) {
+                    button = currentButton;
+                    observer?.observe(currentButton, {
+                        attributes: true,
+                        attributeFilter: ['disabled', 'aria-disabled', 'class'],
+                        subtree: false,
+                    });
+                }
+                tryClick(currentButton);
+            }
+        });
+        // Observe target for new buttons appearing
+        observer.observe(observeTarget, {
+            childList: true,
+            subtree: true,
+        });
+        // If button already exists, observe it directly
+        if (button) {
+            observer.observe(button, {
+                attributes: true,
+                attributeFilter: ['disabled', 'aria-disabled', 'class'],
+                subtree: false,
+            });
+        }
+        // Polling fallback
+        const pollCheck = async () => {
+            while (!clicked && Date.now() - startTime < maxWaitMs) {
+                button = findButton();
+                if (tryClick(button)) {
+                    return;
+                }
+                await delay$1(checkInterval);
+            }
+            // Timeout reached
+            if (!clicked && resolvePromise) {
+                clicked = true;
+                if (observer) {
+                    observer.disconnect();
+                    observer = null;
+                }
+                button = findButton();
+                if (button) {
+                    // Try clicking anyway (sometimes it works even if disabled)
+                    logger.warn('clickContinueButtonAsync: timeout reached, attempting click anyway');
+                    click(button);
+                    resolvePromise(true);
+                }
+                else {
+                    logger.error('clickContinueButtonAsync: timeout reached, button not found');
+                    resolvePromise(false);
+                }
+            }
+        };
+        // Start polling
+        pollCheck();
+        // Wait for either observer or polling to succeed
+        return clickPromise;
     }
     /**
      * Задержка выполнения
@@ -725,6 +859,8 @@ var AutoDuo = (function (exports) {
     }
     /**
      * Подсчитывает обычные блоки (rect и простые path без clip-rule)
+     * Each column of 10 blocks has: 2 <path> (top/bottom rounded) + 8 <rect> (middle) = 10 total
+     * So we count ALL elements (rect + simple path), and each element = 1 block
      */
     function countRegularBlocks(svgContent) {
         let count = 0;
@@ -768,6 +904,8 @@ var AutoDuo = (function (exports) {
             logger.debug('extractBlockDiagramValue: found hundred-block structures =', hundredBlocks);
         }
         // Count regular blocks
+        // Each column of 10 blocks has: 2 <path> (top/bottom rounded) + 8 <rect> (middle) = 10 total
+        // So we count ALL elements (rect + simple path), and each element = 1 block
         const regularBlocks = countRegularBlocks(svgContent);
         if (regularBlocks > 0) {
             const total = regularBlocks + hundredBlocks;
@@ -2268,6 +2406,12 @@ var AutoDuo = (function (exports) {
     function isPieChart(svgContent) {
         if (!svgContent)
             return false;
+        // First, exclude block diagrams (they have rect elements)
+        const hasRects = /<rect[^>]*>/i.test(svgContent);
+        if (hasRects) {
+            // Block diagrams have rects, pie charts don't
+            return false;
+        }
         // Pie charts typically have colored paths or circles
         const hasColoredPaths = /#(?:49C0F8|1CB0F6)/i.test(svgContent);
         const hasCircle = /<circle/i.test(svgContent);
@@ -2289,13 +2433,34 @@ var AutoDuo = (function (exports) {
         canSolve(context) {
             if (!context.choices?.length)
                 return false;
-            // Check if choices contain pie chart iframes
+            // Exclude "Show this another way" challenges with block diagrams
+            // These should be handled by BlockDiagramChoiceSolver
+            const headerMatches = this.headerContains(context, 'show', 'another', 'way');
+            if (headerMatches) {
+                // Check if main challenge has a block diagram
+                const mainIframe = context.container.querySelector('iframe[title="Math Web Element"]');
+                if (mainIframe) {
+                    const srcdoc = mainIframe.getAttribute('srcdoc');
+                    if (srcdoc && isBlockDiagram(srcdoc)) {
+                        // This is a block diagram choice challenge, not a pie chart challenge
+                        return false;
+                    }
+                }
+            }
+            // Check if choices contain pie chart iframes (not block diagrams)
             const hasPieChartChoices = context.choices.some(choice => {
                 const iframe = choice?.querySelector('iframe[title="Math Web Element"]');
                 if (!iframe)
                     return false;
                 const srcdoc = iframe.getAttribute('srcdoc');
-                return srcdoc?.includes('<circle') || srcdoc?.includes('fill="#');
+                if (!srcdoc)
+                    return false;
+                // Explicitly exclude block diagrams
+                if (isBlockDiagram(srcdoc)) {
+                    return false;
+                }
+                // Check if it's actually a pie chart
+                return isPieChart(srcdoc);
             });
             return hasPieChartChoices;
         }
@@ -2527,18 +2692,31 @@ var AutoDuo = (function (exports) {
     class MatchPairsSolver extends BaseSolver {
         name = 'MatchPairsSolver';
         canSolve(context) {
-            // Match pairs have tap tokens and usually "Match" in header
-            const hasHeader = this.headerContains(context, 'match', 'pair');
+            // Match pairs require a specific header
+            const hasHeader = this.headerContains(context, 'match', 'pair') ||
+                this.headerContains(context, 'match', 'equivalent');
+            if (!hasHeader) {
+                // Without a specific header, don't match (to avoid false positives)
+                return false;
+            }
+            // Exclude if there's a NumberLine slider (those use InteractiveSliderSolver)
+            const allIframes = findAllIframes(context.container);
+            for (const iframe of allIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc?.includes('NumberLine')) {
+                    // Exclude ExpressionBuild components
+                    if (!srcdoc.includes('exprBuild') && !srcdoc.includes('ExpressionBuild')) {
+                        return false; // This is a slider challenge, not a match pairs challenge
+                    }
+                }
+            }
             // Check for tap token elements specifically (both variants)
             const tapTokens = context.container.querySelectorAll('[data-test="challenge-tap-token"], [data-test="-challenge-tap-token"]');
             // Need at least 2 tokens to form a pair
             // Also check if there are any active (non-disabled) tokens remaining
             const activeTokens = Array.from(tapTokens).filter(token => token.getAttribute('aria-disabled') !== 'true');
-            // Return true if:
-            // 1. Has header indicating match pairs, OR
-            // 2. Has at least 4 tap tokens (typical match pairs challenge)
-            // AND has at least 2 active tokens (can form at least one pair)
-            return (hasHeader || tapTokens.length >= 4) && activeTokens.length >= 2;
+            // Require header AND at least 2 active tokens
+            return activeTokens.length >= 2;
         }
         solve(context) {
             this.log('starting');
@@ -2881,28 +3059,91 @@ var AutoDuo = (function (exports) {
         name = 'InteractiveSliderSolver';
         canSolve(context) {
             // Check for iframe with NumberLine
+            // Try both the standard method and a broader search
             const allIframes = findAllIframes(context.container);
-            for (const iframe of allIframes) {
+            // Also check all iframes in the container as fallback
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            let hasNumberLine = false;
+            let hasVisualElement = false;
+            let hasNumberLineInExpressionBuild = false;
+            const headerText = this.getHeaderText(context);
+            const isShowAnotherWay = headerText.includes('show') && headerText.includes('another');
+            this.log('checking', combinedIframes.length, 'iframes (standard:', allIframes.length, 'fallback:', allIframesFallback.length, ')');
+            for (const iframe of combinedIframes) {
                 const srcdoc = iframe.getAttribute('srcdoc');
-                if (srcdoc?.includes('NumberLine')) {
-                    // Exclude if this is an ExpressionBuild component
-                    if (srcdoc.includes('exprBuild') || srcdoc.includes('ExpressionBuild')) {
-                        continue;
+                if (!srcdoc) {
+                    // Check if iframe has src that might contain NumberLine
+                    const src = iframe.getAttribute('src');
+                    if (src?.includes('NumberLine')) {
+                        this.log('found NumberLine in src attribute');
+                        hasNumberLine = true;
                     }
-                    return true;
+                    continue;
+                }
+                // Check for NumberLine
+                if (srcdoc.includes('NumberLine')) {
+                    // Check if this is an ExpressionBuild component
+                    const isExpressionBuild = srcdoc.includes('exprBuild') || srcdoc.includes('ExpressionBuild');
+                    if (isExpressionBuild) {
+                        // For "Show this another way" challenges with block diagram,
+                        // NumberLine can be in ExpressionBuild iframe, but it's still a slider challenge
+                        if (isShowAnotherWay) {
+                            this.log('found NumberLine in ExpressionBuild iframe, but header suggests slider challenge');
+                            hasNumberLineInExpressionBuild = true;
+                        }
+                        else {
+                            this.log('skipping ExpressionBuild NumberLine (not show another way)');
+                            continue;
+                        }
+                    }
+                    else {
+                        hasNumberLine = true;
+                        this.log('found NumberLine iframe');
+                    }
+                }
+                // Check for visual element (block diagram or pie chart)
+                if (srcdoc.includes('<svg')) {
+                    if (isBlockDiagram(srcdoc)) {
+                        hasVisualElement = true;
+                        this.log('found block diagram iframe');
+                    }
+                    else if (srcdoc.includes('circle') || srcdoc.includes('path')) {
+                        // Could be a pie chart
+                        hasVisualElement = true;
+                        this.log('found potential pie chart iframe');
+                    }
                 }
             }
+            this.log('hasNumberLine:', hasNumberLine, 'hasVisualElement:', hasVisualElement, 'hasNumberLineInExpressionBuild:', hasNumberLineInExpressionBuild, 'header:', headerText);
+            // Special case: "Show this another way" with block diagram + NumberLine slider
+            // Even if NumberLine is in ExpressionBuild iframe, it's still a slider challenge
+            if (isShowAnotherWay && hasVisualElement && (hasNumberLine || hasNumberLineInExpressionBuild)) {
+                this.log('can solve: Show another way with visual element and NumberLine');
+                return true;
+            }
+            // If we have NumberLine (not in ExpressionBuild), we can solve it
+            if (hasNumberLine) {
+                this.log('can solve: NumberLine found');
+                return true;
+            }
+            this.log('cannot solve: no NumberLine found');
             return false;
         }
         solve(context) {
             this.log('starting');
             const allIframes = findAllIframes(context.container);
+            // Also check all iframes as fallback
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
             let targetValue = null;
             let equation = null;
             let sliderIframe = null;
+            const headerText = this.getHeaderText(context);
+            const isShowAnotherWay = headerText.includes('show') && headerText.includes('another');
             // Find visual element (block diagram or pie chart) + slider combination
-            if (allIframes.length >= 2) {
-                const visualIframe = findIframeByContent(allIframes, '<svg');
+            if (combinedIframes.length >= 1) {
+                const visualIframe = findIframeByContent(combinedIframes, '<svg');
                 if (visualIframe) {
                     const visualSrcdoc = visualIframe.getAttribute('srcdoc');
                     if (visualSrcdoc) {
@@ -2926,11 +3167,19 @@ var AutoDuo = (function (exports) {
                         }
                     }
                     // Find the slider iframe
-                    for (const ifrm of allIframes) {
-                        if (ifrm !== visualIframe) {
-                            const srcdoc = ifrm.getAttribute('srcdoc');
-                            if (srcdoc?.includes('NumberLine')) {
+                    // For "Show this another way" challenges, NumberLine might be in ExpressionBuild iframe
+                    for (const ifrm of combinedIframes) {
+                        if (ifrm === visualIframe)
+                            continue;
+                        const srcdoc = ifrm.getAttribute('srcdoc');
+                        if (!srcdoc)
+                            continue;
+                        if (srcdoc.includes('NumberLine')) {
+                            // For "Show this another way", accept NumberLine even in ExpressionBuild iframe
+                            const isExpressionBuild = srcdoc.includes('exprBuild') || srcdoc.includes('ExpressionBuild');
+                            if (isShowAnotherWay || !isExpressionBuild) {
                                 sliderIframe = ifrm;
+                                this.log('found slider iframe (NumberLine)');
                                 break;
                             }
                         }
@@ -2967,7 +3216,18 @@ var AutoDuo = (function (exports) {
             }
             // Find slider iframe if not found yet
             if (!sliderIframe) {
-                sliderIframe = findIframeByContent(allIframes, 'NumberLine');
+                sliderIframe = findIframeByContent(combinedIframes, 'NumberLine');
+                // Also check ExpressionBuild iframes for "Show this another way" challenges
+                if (!sliderIframe && isShowAnotherWay) {
+                    for (const ifrm of combinedIframes) {
+                        const srcdoc = ifrm.getAttribute('srcdoc');
+                        if (srcdoc?.includes('NumberLine')) {
+                            sliderIframe = ifrm;
+                            this.log('found slider iframe in ExpressionBuild (Show another way)');
+                            break;
+                        }
+                    }
+                }
             }
             if (!sliderIframe) {
                 return this.failure('interactiveSlider', 'No slider iframe found');
@@ -3575,27 +3835,98 @@ var AutoDuo = (function (exports) {
             try {
                 const iframeWindow = iframe.contentWindow;
                 const iframeDoc = iframe.contentDocument ?? iframeWindow?.document ?? null;
-                // Try to access exprBuild directly
+                // Method 1: Try to access exprBuild directly from window
                 if (iframeWindow?.exprBuild) {
                     const windowTokens = iframeWindow.tokens ?? [];
-                    tokens.push(...windowTokens);
-                    numEntries = iframeWindow.exprBuild.entries?.length ?? 0;
+                    if (windowTokens.length > 0) {
+                        tokens.push(...windowTokens);
+                        numEntries = iframeWindow.exprBuild.entries?.length ?? 0;
+                        this.logDebug('extracted tokens from window.exprBuild');
+                    }
                 }
-                // If not found, parse from script content
+                // Method 2: Try accessing tokens via window.tokens or window.mathDiagram
+                if (tokens.length === 0 && iframeWindow) {
+                    try {
+                        const win = iframeWindow;
+                        if (Array.isArray(win.tokens)) {
+                            tokens.push(...win.tokens);
+                            this.logDebug('extracted tokens from window.tokens');
+                        }
+                        // Check mathDiagram object
+                        const mathDiagram = win.mathDiagram;
+                        if (mathDiagram?.tokens && Array.isArray(mathDiagram.tokens)) {
+                            tokens.push(...mathDiagram.tokens);
+                            this.logDebug('extracted tokens from window.mathDiagram.tokens');
+                        }
+                    }
+                    catch {
+                        // Cross-origin or access denied, continue to next method
+                    }
+                }
+                // Method 3: Parse from script content (more robust patterns)
                 if (tokens.length === 0 && iframeDoc) {
                     const scripts = iframeDoc.querySelectorAll('script');
-                    for (const script of scripts) {
-                        const content = script.textContent ?? '';
-                        // Parse tokens array
-                        const tokensMatch = content.match(/const\s+tokens\s*=\s*\[(.*?)\];/s);
+                    const allScriptContent = Array.from(scripts)
+                        .map(s => s.textContent ?? '')
+                        .join('\n');
+                    // Try multiple token patterns
+                    const tokenPatterns = [
+                        /const\s+tokens\s*=\s*\[(.*?)\];/s,
+                        /let\s+tokens\s*=\s*\[(.*?)\];/s,
+                        /var\s+tokens\s*=\s*\[(.*?)\];/s,
+                        /tokens\s*=\s*\[(.*?)\];/s,
+                        /window\.tokens\s*=\s*\[(.*?)\];/s,
+                    ];
+                    for (const pattern of tokenPatterns) {
+                        const tokensMatch = allScriptContent.match(pattern);
                         if (tokensMatch?.[1]) {
                             this.parseTokensString(tokensMatch[1], tokens);
+                            if (tokens.length > 0) {
+                                this.logDebug('extracted tokens from script pattern:', pattern.toString());
+                                break;
+                            }
                         }
-                        // Parse entries count
-                        const entriesMatch = content.match(/entries:\s*\[(null,?\s*)+\]/);
+                    }
+                    // Parse entries count with multiple patterns
+                    const entriesPatterns = [
+                        /entries:\s*\[(null,?\s*)+\]/,
+                        /entries\s*:\s*\[(null,?\s*)+\]/,
+                        /entries\s*=\s*\[(null,?\s*)+\]/,
+                    ];
+                    for (const pattern of entriesPatterns) {
+                        const entriesMatch = allScriptContent.match(pattern);
                         if (entriesMatch) {
                             const nullMatches = entriesMatch[0].match(/null/g);
                             numEntries = nullMatches?.length ?? 0;
+                            if (numEntries > 0) {
+                                this.logDebug('extracted numEntries from script:', numEntries);
+                                break;
+                            }
+                        }
+                    }
+                    // Fallback: try to infer numEntries from exprBuild structure
+                    if (numEntries === 0) {
+                        const exprBuildMatch = allScriptContent.match(/exprBuild\s*:\s*\{[^}]*entries\s*:\s*\[(.*?)\]/s);
+                        if (exprBuildMatch?.[1]) {
+                            const nullMatches = exprBuildMatch[1].match(/null/g);
+                            numEntries = nullMatches?.length ?? 0;
+                        }
+                    }
+                }
+                // Method 4: If still no tokens, check nested iframes (for NumberLine cases)
+                if (tokens.length === 0 && iframeDoc) {
+                    const nestedIframes = iframeDoc.querySelectorAll('iframe');
+                    for (const nestedIframe of nestedIframes) {
+                        try {
+                            const nestedWindow = nestedIframe.contentWindow;
+                            if (nestedWindow?.tokens && Array.isArray(nestedWindow.tokens)) {
+                                tokens.push(...nestedWindow.tokens);
+                                this.logDebug('extracted tokens from nested iframe');
+                                break;
+                            }
+                        }
+                        catch {
+                            // Cross-origin, skip
                         }
                     }
                 }
@@ -3603,23 +3934,65 @@ var AutoDuo = (function (exports) {
             catch (e) {
                 this.logError('error extracting tokens:', e);
             }
+            this.logDebug('final tokens:', tokens, 'numEntries:', numEntries);
             return { tokens, numEntries };
         }
         parseTokensString(tokensStr, tokens) {
-            const tokenParts = tokensStr.split(',').map(t => t.trim());
-            for (const part of tokenParts) {
-                // renderNumber(X) -> X
-                const numMatch = part.match(/renderNumber\((\d+)\)/);
-                if (numMatch?.[1]) {
-                    tokens.push(parseInt(numMatch[1], 10));
+            // Remove comments and clean up
+            const cleaned = tokensStr.replace(/\/\/.*$/gm, '').trim();
+            // Split by comma, but be careful with nested structures
+            const tokenParts = [];
+            let current = '';
+            let depth = 0;
+            for (const char of cleaned) {
+                if (char === '(' || char === '[' || char === '{') {
+                    depth++;
+                    current += char;
+                }
+                else if (char === ')' || char === ']' || char === '}') {
+                    depth--;
+                    current += char;
+                }
+                else if (char === ',' && depth === 0) {
+                    tokenParts.push(current.trim());
+                    current = '';
                 }
                 else {
-                    // String token like "+" or "-"
-                    const strMatch = part.match(/"([^"]+)"|'([^']+)'/);
-                    if (strMatch) {
-                        tokens.push(strMatch[1] ?? strMatch[2] ?? '');
-                    }
+                    current += char;
                 }
+            }
+            if (current.trim()) {
+                tokenParts.push(current.trim());
+            }
+            for (const part of tokenParts) {
+                const trimmed = part.trim();
+                if (!trimmed)
+                    continue;
+                // Pattern 1: renderNumber(X) -> X
+                const numMatch = trimmed.match(/renderNumber\((\d+)\)/);
+                if (numMatch?.[1]) {
+                    tokens.push(parseInt(numMatch[1], 10));
+                    continue;
+                }
+                // Pattern 2: Just a number
+                const plainNumMatch = trimmed.match(/^(\d+)$/);
+                if (plainNumMatch?.[1]) {
+                    tokens.push(parseInt(plainNumMatch[1], 10));
+                    continue;
+                }
+                // Pattern 3: String token like "+" or "-"
+                const strMatch = trimmed.match(/"([^"]+)"|'([^']+)'/);
+                if (strMatch) {
+                    tokens.push(strMatch[1] ?? strMatch[2] ?? '');
+                    continue;
+                }
+                // Pattern 4: String without quotes (like + or -)
+                if (['+', '-', '*', '/', '×', '÷'].includes(trimmed)) {
+                    tokens.push(trimmed);
+                    continue;
+                }
+                // Log unparsed tokens for debugging
+                this.logDebug('could not parse token:', trimmed);
             }
         }
         findExpressionSolution(tokens, numEntries, target) {
@@ -4150,77 +4523,211 @@ var AutoDuo = (function (exports) {
             if (!headerMatches) {
                 return false;
             }
-            // Must have iframe with block diagram in the challenge
+            // Exclude if there's a NumberLine slider (those use InteractiveSliderSolver)
+            const allIframes = findAllIframes(context.container);
+            for (const iframe of allIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc?.includes('NumberLine')) {
+                    // Exclude ExpressionBuild components
+                    if (!srcdoc.includes('exprBuild') && !srcdoc.includes('ExpressionBuild')) {
+                        return false; // This is a slider challenge, not a choice challenge
+                    }
+                }
+            }
+            // Check if choices contain block diagrams (new variant: equation + block diagram choices)
+            const hasBlockDiagramChoices = context.choices.some(choice => {
+                const iframe = choice?.querySelector('iframe[title="Math Web Element"]');
+                if (!iframe)
+                    return false;
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    return false;
+                return isBlockDiagram(srcdoc);
+            });
+            if (hasBlockDiagramChoices) {
+                return true;
+            }
+            // Fallback: check if main container has block diagram (old variant: block diagram + number choices)
             const iframe = context.container.querySelector('iframe[title="Math Web Element"]');
             if (!iframe) {
                 return false;
             }
             const srcdoc = iframe.getAttribute('srcdoc');
-            if (!srcdoc?.includes('<svg') || !srcdoc.includes('<rect')) {
+            if (!srcdoc) {
                 return false;
             }
-            return true;
+            // Use isBlockDiagram() for more accurate detection
+            return isBlockDiagram(srcdoc);
         }
         solve(context) {
             this.log('starting');
             if (!context.choices?.length) {
                 return this.failure('blockDiagramChoice', 'no choices found');
             }
-            // Find the block diagram iframe
-            const iframe = context.container.querySelector('iframe[title="Math Web Element"]');
-            if (!iframe) {
-                return this.failure('blockDiagramChoice', 'no iframe found');
-            }
-            const srcdoc = iframe.getAttribute('srcdoc');
-            if (!srcdoc) {
-                return this.failure('blockDiagramChoice', 'no srcdoc');
-            }
-            // Extract block diagram value
-            const blockValue = extractBlockDiagramValue(srcdoc);
-            if (blockValue === null) {
-                return this.failure('blockDiagramChoice', 'could not extract block diagram value');
-            }
-            this.log('block diagram value:', blockValue);
-            // Find choice with matching value
-            let matchedIndex = -1;
-            let matchedValue = 0;
-            for (let i = 0; i < context.choices.length; i++) {
-                const choice = context.choices[i];
-                if (!choice)
-                    continue;
-                // Extract value from choice (KaTeX)
-                const valueStr = extractKatexValue(choice);
-                if (!valueStr) {
-                    this.log('choice', i, 'no KaTeX value');
-                    continue;
-                }
-                const value = evaluateMathExpression(valueStr);
-                if (value === null) {
-                    this.log('choice', i, 'could not evaluate:', valueStr);
-                    continue;
-                }
-                this.log('choice', i, '=', value);
-                if (Math.abs(value - blockValue) < 0.0001) {
-                    matchedIndex = i;
-                    matchedValue = value;
-                    this.log('found matching choice', i, ':', blockValue, '=', value);
-                    break;
-                }
-            }
-            if (matchedIndex === -1) {
-                return this.failure('blockDiagramChoice', `no choice matches block value ${blockValue}`);
-            }
-            const matchedChoice = context.choices[matchedIndex];
-            if (matchedChoice) {
-                this.click(matchedChoice);
-                this.log('clicked choice', matchedIndex);
-            }
-            return this.success({
-                type: 'blockDiagramChoice',
-                blockValue,
-                selectedChoice: matchedIndex,
-                selectedValue: matchedValue,
+            // Check if choices contain block diagrams (new variant: equation + block diagram choices)
+            const hasBlockDiagramChoices = context.choices.some(choice => {
+                const iframe = choice?.querySelector('iframe[title="Math Web Element"]');
+                if (!iframe)
+                    return false;
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    return false;
+                return isBlockDiagram(srcdoc);
             });
+            let targetValue = null;
+            let blockValue = null;
+            if (hasBlockDiagramChoices) {
+                // Variant 1: Equation shows number, choices show block diagrams
+                // Extract target value from equation (KaTeX in main container)
+                if (context.equationContainer) {
+                    const valueStr = extractKatexValue(context.equationContainer);
+                    if (valueStr) {
+                        targetValue = evaluateMathExpression(valueStr);
+                        this.log('target value from equationContainer:', targetValue);
+                    }
+                }
+                // Fallback: try to find KaTeX in container directly
+                if (targetValue === null) {
+                    const katexElement = context.container.querySelector('.katex');
+                    if (katexElement) {
+                        const valueStr = extractKatexValue(katexElement);
+                        if (valueStr) {
+                            targetValue = evaluateMathExpression(valueStr);
+                            this.log('target value from katex in container:', targetValue);
+                        }
+                    }
+                }
+                // Another fallback: look for number in _1KXkZ or similar containers
+                if (targetValue === null) {
+                    const numberContainer = context.container.querySelector('._1KXkZ, ._2On2O');
+                    if (numberContainer) {
+                        const valueStr = extractKatexValue(numberContainer);
+                        if (valueStr) {
+                            targetValue = evaluateMathExpression(valueStr);
+                            this.log('target value from number container:', targetValue);
+                        }
+                    }
+                }
+                if (targetValue === null) {
+                    return this.failure('blockDiagramChoice', 'could not extract target value from equation');
+                }
+                // Find choice with block diagram matching target value
+                let matchedIndex = -1;
+                let matchedBlockValue = 0;
+                this.log('searching', context.choices.length, 'choices for block diagram matching', targetValue);
+                for (let i = 0; i < context.choices.length; i++) {
+                    const choice = context.choices[i];
+                    if (!choice) {
+                        this.log('choice', i, 'is null');
+                        continue;
+                    }
+                    // Find block diagram iframe in choice
+                    const iframe = choice.querySelector('iframe[title="Math Web Element"]');
+                    if (!iframe) {
+                        this.log('choice', i, 'no iframe');
+                        continue;
+                    }
+                    const srcdoc = iframe.getAttribute('srcdoc');
+                    if (!srcdoc) {
+                        this.log('choice', i, 'no srcdoc');
+                        continue;
+                    }
+                    // Check if it's actually a block diagram
+                    if (!isBlockDiagram(srcdoc)) {
+                        this.log('choice', i, 'is not a block diagram');
+                        continue;
+                    }
+                    // Extract block diagram value
+                    const diagramValue = extractBlockDiagramValue(srcdoc);
+                    if (diagramValue === null) {
+                        this.log('choice', i, 'could not extract block diagram value');
+                        continue;
+                    }
+                    this.log('choice', i, 'block diagram value:', diagramValue, 'target:', targetValue);
+                    if (Math.abs(diagramValue - targetValue) < 0.0001) {
+                        matchedIndex = i;
+                        matchedBlockValue = diagramValue;
+                        blockValue = diagramValue;
+                        this.log('found matching choice', i, ':', targetValue, '=', diagramValue);
+                        break;
+                    }
+                    else {
+                        this.log('choice', i, 'does not match:', diagramValue, '!=', targetValue);
+                    }
+                }
+                if (matchedIndex === -1) {
+                    return this.failure('blockDiagramChoice', `no choice matches target value ${targetValue}`);
+                }
+                const matchedChoice = context.choices[matchedIndex];
+                if (matchedChoice) {
+                    this.click(matchedChoice);
+                    this.log('clicked choice', matchedIndex);
+                }
+                return this.success({
+                    type: 'blockDiagramChoice',
+                    blockValue: matchedBlockValue,
+                    selectedChoice: matchedIndex,
+                    selectedValue: matchedBlockValue,
+                });
+            }
+            else {
+                // Variant 2: Block diagram in main container, choices show numbers (old variant)
+                // Find the block diagram iframe
+                const iframe = context.container.querySelector('iframe[title="Math Web Element"]');
+                if (!iframe) {
+                    return this.failure('blockDiagramChoice', 'no iframe found');
+                }
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc) {
+                    return this.failure('blockDiagramChoice', 'no srcdoc');
+                }
+                // Extract block diagram value
+                blockValue = extractBlockDiagramValue(srcdoc);
+                if (blockValue === null) {
+                    return this.failure('blockDiagramChoice', 'could not extract block diagram value');
+                }
+                this.log('block diagram value:', blockValue);
+                // Find choice with matching value
+                let matchedIndex = -1;
+                let matchedValue = 0;
+                for (let i = 0; i < context.choices.length; i++) {
+                    const choice = context.choices[i];
+                    if (!choice)
+                        continue;
+                    // Extract value from choice (KaTeX)
+                    const valueStr = extractKatexValue(choice);
+                    if (!valueStr) {
+                        this.log('choice', i, 'no KaTeX value');
+                        continue;
+                    }
+                    const value = evaluateMathExpression(valueStr);
+                    if (value === null) {
+                        this.log('choice', i, 'could not evaluate:', valueStr);
+                        continue;
+                    }
+                    this.log('choice', i, '=', value);
+                    if (Math.abs(value - blockValue) < 0.0001) {
+                        matchedIndex = i;
+                        matchedValue = value;
+                        this.log('found matching choice', i, ':', blockValue, '=', value);
+                        break;
+                    }
+                }
+                if (matchedIndex === -1) {
+                    return this.failure('blockDiagramChoice', `no choice matches block value ${blockValue}`);
+                }
+                const matchedChoice = context.choices[matchedIndex];
+                if (matchedChoice) {
+                    this.click(matchedChoice);
+                    this.log('clicked choice', matchedIndex);
+                }
+                return this.success({
+                    type: 'blockDiagramChoice',
+                    blockValue,
+                    selectedChoice: matchedIndex,
+                    selectedValue: matchedValue,
+                });
+            }
         }
     }
 
@@ -4446,7 +4953,7 @@ var AutoDuo = (function (exports) {
                     // Check if on result screen (lesson complete)
                     if (isOnResultScreen()) {
                         logger.info('AutoRunner: lesson complete, looking for next...');
-                        const clicked = clickContinueButton();
+                        const clicked = await clickContinueButtonAsync(5000);
                         if (!clicked) {
                             stuckCounter++;
                             logger.warn(`AutoRunner: cannot click continue (attempt ${stuckCounter}/${maxStuckAttempts})`);
@@ -4482,7 +4989,7 @@ var AutoDuo = (function (exports) {
                             this.stop();
                             break;
                         }
-                        const clicked = clickContinueButton();
+                        const clicked = await clickContinueButtonAsync(5000);
                         if (!clicked) {
                             stuckCounter++;
                             if (stuckCounter >= maxStuckAttempts) {
@@ -4504,8 +5011,13 @@ var AutoDuo = (function (exports) {
                     if (solved) {
                         this.solvedCount++;
                         await delay$1(this.config.delayAfterSolve);
-                        // Click continue/check button
-                        clickContinueButton();
+                        // Click continue/check button (wait for it to become enabled)
+                        const clicked = await clickContinueButtonAsync(5000);
+                        if (!clicked) {
+                            logger.warn('AutoRunner: continue button not clicked (may be disabled or not found)');
+                            // Don't increment stuck counter here - the challenge was solved,
+                            // just the button might need more time
+                        }
                         await delay$1(this.config.delayBetweenActions);
                     }
                     else {
@@ -4874,6 +5386,7 @@ var AutoDuo = (function (exports) {
         SELECTORS: SELECTORS,
         click: click,
         clickContinueButton: clickContinueButton,
+        clickContinueButtonAsync: clickContinueButtonAsync,
         delay: delay$1,
         findAllIframes: findAllIframes,
         findIframeByContent: findIframeByContent,
