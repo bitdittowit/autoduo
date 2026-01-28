@@ -7,6 +7,7 @@ import { BaseSolver } from './BaseSolver';
 import type { IChallengeContext, ISolverResult } from '../types';
 import { evaluateMathExpression } from '../math/expressions';
 import { findAllIframes, findIframeByContent } from '../dom/selectors';
+import { cleanLatexWrappers } from '../parsers/latex';
 
 interface IExpressionBuildResult extends ISolverResult {
     type: 'expressionBuild';
@@ -109,6 +110,7 @@ export class ExpressionBuildSolver extends BaseSolver {
         }
 
         this.log('tokens =', JSON.stringify(tokens), ', numEntries =', numEntries);
+        this.logDebug('full token array:', tokens.map((t, i) => `[${i}]=${JSON.stringify(t)}`));
 
         // Find solution
         const solution = this.findExpressionSolution(tokens, numEntries, targetValue);
@@ -135,19 +137,30 @@ export class ExpressionBuildSolver extends BaseSolver {
         const annotations = context.container.querySelectorAll('annotation');
 
         for (const annotation of annotations) {
-            const text = annotation.textContent ?? '';
+            let text = annotation.textContent ?? '';
 
             if (text.includes('\\duoblank')) {
-                // Format: "12 = \duoblank{3}"
-                const match = text.match(/(\d+)\s*=\s*\\duoblank/);
+                // Clean LaTeX wrappers (e.g., \mathbf{-7=\duoblank{3}} -> -7=\duoblank{3})
+                text = cleanLatexWrappers(text);
+                this.logDebug('Raw annotation text:', annotation.textContent);
+                this.logDebug('Cleaned annotation text:', text);
+
+                // Format: "-7 = \duoblank{3}" or "12 = \duoblank{3}"
+                // Match optional negative sign, digits, optional decimal part, whitespace, equals, whitespace, backslash duoblank
+                const match = text.match(/^(-?\d+(?:\.\d+)?)\s*=\s*\\duoblank/);
                 if (match?.[1]) {
-                    return parseInt(match[1], 10);
+                    const target = parseFloat(match[1]);
+                    this.logDebug('Extracted target from left side:', target);
+                    return target;
                 }
 
-                // Format: "\duoblank{3} = 12"
-                const matchReverse = text.match(/\\duoblank\{\d+\}\s*=\s*(\d+)/);
+                // Format: "\duoblank{3} = -7" or "\duoblank{3} = 12"
+                // Match backslash duoblank, optional number in braces, whitespace, equals, whitespace, optional negative sign, digits, optional decimal part
+                const matchReverse = text.match(/\\duoblank\{\d+\}\s*=\s*(-?\d+(?:\.\d+)?)/);
                 if (matchReverse?.[1]) {
-                    return parseInt(matchReverse[1], 10);
+                    const target = parseFloat(matchReverse[1]);
+                    this.logDebug('Extracted target from right side:', target);
+                    return target;
                 }
             }
         }
@@ -309,24 +322,32 @@ export class ExpressionBuildSolver extends BaseSolver {
             const trimmed = part.trim();
             if (!trimmed) continue;
 
-            // Pattern 1: renderNumber(X) -> X
-            const numMatch = trimmed.match(/renderNumber\((\d+)\)/);
+            // Pattern 1: renderNumber(X) -> X (supports negative numbers and decimals)
+            const numMatch = trimmed.match(/renderNumber\((-?\d+(?:\.\d+)?)\)/);
             if (numMatch?.[1]) {
-                tokens.push(parseInt(numMatch[1], 10));
+                tokens.push(parseFloat(numMatch[1]));
                 continue;
             }
 
-            // Pattern 2: Just a number
-            const plainNumMatch = trimmed.match(/^(\d+)$/);
+            // Pattern 2: Just a number (supports negative numbers and decimals)
+            const plainNumMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)$/);
             if (plainNumMatch?.[1]) {
-                tokens.push(parseInt(plainNumMatch[1], 10));
+                tokens.push(parseFloat(plainNumMatch[1]));
                 continue;
             }
 
-            // Pattern 3: String token like "+" or "-"
+            // Pattern 3: Quoted string - check if it's a number or operator
             const strMatch = trimmed.match(/"([^"]+)"|'([^']+)'/);
             if (strMatch) {
-                tokens.push(strMatch[1] ?? strMatch[2] ?? '');
+                const strValue = strMatch[1] ?? strMatch[2] ?? '';
+                // Check if it's a number (including decimals)
+                const quotedNumMatch = strValue.match(/^(-?\d+(?:\.\d+)?)$/);
+                if (quotedNumMatch?.[1]) {
+                    tokens.push(parseFloat(quotedNumMatch[1]));
+                } else {
+                    // It's an operator or other string token
+                    tokens.push(strValue);
+                }
                 continue;
             }
 
@@ -362,10 +383,12 @@ export class ExpressionBuildSolver extends BaseSolver {
             }
         }
 
+        this.logDebug('separated tokens - numbers:', numbers.map(n => `[${n.index}]=${n.value}`), 'operators:', operators.map(o => `[${o.index}]=${o.value}`));
+
         // For numEntries = 1
         if (numEntries === 1) {
             for (const num of numbers) {
-                if (num.value === target) {
+                if (this.isEqualWithTolerance(num.value as number, target)) {
                     return [num.index];
                 }
             }
@@ -390,6 +413,9 @@ export class ExpressionBuildSolver extends BaseSolver {
         operators: ITokenInfo[],
         target: number,
     ): number[] | null {
+        this.logDebug('findThreeTokenSolution: numbers:', numbers.map(n => `${n.value}[${n.index}]`), 'operators:', operators.map(o => `${o.value}[${o.index}]`), 'target:', target);
+
+        // Standard pattern: num1 op num2 (3 tokens total)
         for (const num1 of numbers) {
             for (const op of operators) {
                 for (const num2 of numbers) {
@@ -401,20 +427,25 @@ export class ExpressionBuildSolver extends BaseSolver {
                         num2.value as number,
                     );
 
-                    if (result === target) {
+                    if (result !== null && this.isEqualWithTolerance(result, target)) {
                         this.log(
-                            'found:',
+                            'found solution:',
                             num1.value,
                             op.value,
                             num2.value,
                             '=',
                             target,
+                            '(indices:',
+                            [num1.index, op.index, num2.index],
+                            ')',
                         );
                         return [num1.index, op.index, num2.index];
                     }
                 }
             }
         }
+
+        this.logDebug('no solution found for 3-token pattern');
         return null;
     }
 
@@ -439,7 +470,7 @@ export class ExpressionBuildSolver extends BaseSolver {
                             const expr = `${num1.value}${op1.value}${num2.value}${op2.value}${num3.value}`;
                             const result = evaluateMathExpression(expr);
 
-                            if (result === target) {
+                            if (result !== null && this.isEqualWithTolerance(result, target)) {
                                 this.log('found:', expr, '=', target);
                                 return [
                                     num1.index,
@@ -472,6 +503,10 @@ export class ExpressionBuildSolver extends BaseSolver {
         default:
             return null;
         }
+    }
+
+    private isEqualWithTolerance(a: number, b: number, tolerance = 0.0001): boolean {
+        return Math.abs(a - b) < tolerance;
     }
 
     private setSolution(iframe: HTMLIFrameElement, solution: number[]): void {

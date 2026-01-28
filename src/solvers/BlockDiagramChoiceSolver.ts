@@ -10,6 +10,7 @@ import type { IChallengeContext, ISolverResult } from '../types';
 import { extractBlockDiagramValue, isBlockDiagram } from '../parsers/BlockDiagramParser';
 import { extractKatexValue } from '../parsers/KatexParser';
 import { evaluateMathExpression } from '../math/expressions';
+import { solveEquationWithBlank } from '../math/equations';
 import { findAllIframes } from '../dom/selectors';
 
 interface IBlockDiagramChoiceResult extends ISolverResult {
@@ -28,10 +29,28 @@ export class BlockDiagramChoiceSolver extends BaseSolver {
             return false;
         }
 
-        // Check for "Show this another way" or similar headers
-        const headerMatches = this.headerContains(context, 'show', 'another', 'way');
-        if (!headerMatches) {
-            return false;
+        // Check if choices contain block diagrams (new variant: equation + block diagram choices)
+        const hasBlockDiagramChoices = context.choices.some(choice => {
+            const iframe = choice?.querySelector('iframe[title="Math Web Element"]');
+            if (!iframe) return false;
+            const srcdoc = iframe.getAttribute('srcdoc');
+            if (!srcdoc) return false;
+            return isBlockDiagram(srcdoc);
+        });
+
+        // If choices are block diagrams, allow even without "Show this another way" header
+        // (for equations with \duoblank and block diagram choices)
+        if (hasBlockDiagramChoices) {
+            // Check if equation has \duoblank (this is a valid case)
+            if (context.equationContainer) {
+                const annotation = context.equationContainer.querySelector('annotation');
+                if (annotation?.textContent) {
+                    const text = annotation.textContent;
+                    if (text.includes('\\duoblank') && text.includes('=')) {
+                        return true;
+                    }
+                }
+            }
         }
 
         // Exclude if there's a NumberLine slider (those use InteractiveSliderSolver)
@@ -46,17 +65,15 @@ export class BlockDiagramChoiceSolver extends BaseSolver {
             }
         }
 
-        // Check if choices contain block diagrams (new variant: equation + block diagram choices)
-        const hasBlockDiagramChoices = context.choices.some(choice => {
-            const iframe = choice?.querySelector('iframe[title="Math Web Element"]');
-            if (!iframe) return false;
-            const srcdoc = iframe.getAttribute('srcdoc');
-            if (!srcdoc) return false;
-            return isBlockDiagram(srcdoc);
-        });
-
+        // If choices are block diagrams, allow (either with header or with \duoblank equation)
         if (hasBlockDiagramChoices) {
             return true;
+        }
+
+        // Check for "Show this another way" or similar headers
+        const headerMatches = this.headerContains(context, 'show', 'another', 'way');
+        if (!headerMatches) {
+            return false;
         }
 
         // Fallback: check if main container has block diagram (old variant: block diagram + number choices)
@@ -97,8 +114,21 @@ export class BlockDiagramChoiceSolver extends BaseSolver {
 
         if (hasBlockDiagramChoices) {
             // Variant 1: Equation shows number, choices show block diagrams
-            // Extract target value from equation (KaTeX in main container)
+            // Check if equation has \duoblank (needs to be solved)
             if (context.equationContainer) {
+                const annotation = context.equationContainer.querySelector('annotation');
+                if (annotation?.textContent) {
+                    const equationText = annotation.textContent;
+                    if (equationText.includes('\\duoblank') && equationText.includes('=')) {
+                        // Solve equation with blank
+                        targetValue = solveEquationWithBlank(equationText);
+                        this.log('solved equation with blank, target value:', targetValue);
+                    }
+                }
+            }
+
+            // Extract target value from equation (KaTeX in main container) if not solved yet
+            if (targetValue === null && context.equationContainer) {
                 const valueStr = extractKatexValue(context.equationContainer);
                 if (valueStr) {
                     targetValue = evaluateMathExpression(valueStr);
@@ -177,15 +207,67 @@ export class BlockDiagramChoiceSolver extends BaseSolver {
 
                 this.log('choice', i, 'block diagram value:', diagramValue, 'target:', targetValue);
 
+                // Direct match
                 if (Math.abs(diagramValue - targetValue) < 0.0001) {
                     matchedIndex = i;
                     matchedBlockValue = diagramValue;
                     blockValue = diagramValue;
                     this.log('found matching choice', i, ':', targetValue, '=', diagramValue);
                     break;
-                } else {
-                    this.log('choice', i, 'does not match:', diagramValue, '!=', targetValue);
                 }
+
+                // Check if targetValue is a decimal (0-1) and diagramValue is an integer
+                // This handles cases like 0.85 (85%) matching 85 blocks
+                if (targetValue > 0 && targetValue < 1 && Number.isInteger(diagramValue)) {
+                    const targetAsPercent = targetValue * 100;
+                    if (Math.abs(diagramValue - targetAsPercent) < 0.0001) {
+                        matchedIndex = i;
+                        matchedBlockValue = diagramValue;
+                        blockValue = diagramValue;
+                        this.log('found matching choice (percentage)', i, ':', targetValue, '* 100 =', targetAsPercent, '=', diagramValue);
+                        break;
+                    }
+                }
+
+                // Check reverse: if targetValue is an integer and diagramValue is decimal (0-1)
+                if (Number.isInteger(targetValue) && diagramValue > 0 && diagramValue < 1) {
+                    const diagramAsPercent = diagramValue * 100;
+                    if (Math.abs(targetValue - diagramAsPercent) < 0.0001) {
+                        matchedIndex = i;
+                        matchedBlockValue = diagramValue;
+                        blockValue = diagramValue;
+                        this.log('found matching choice (reverse percentage)', i, ':', targetValue, '=', diagramValue, '* 100 =', diagramAsPercent);
+                        break;
+                    }
+                }
+
+                // Check if targetValue is a decimal >= 1 and diagramValue is an integer
+                // This handles cases like 1.2 matching 120 blocks (1.2 * 100 = 120)
+                if (targetValue >= 1 && !Number.isInteger(targetValue) && Number.isInteger(diagramValue)) {
+                    const targetAsPercent = targetValue * 100;
+                    if (Math.abs(diagramValue - targetAsPercent) < 0.0001) {
+                        matchedIndex = i;
+                        matchedBlockValue = diagramValue;
+                        blockValue = diagramValue;
+                        this.log('found matching choice (decimal to percent)', i, ':', targetValue, '* 100 =', targetAsPercent, '=', diagramValue);
+                        break;
+                    }
+                }
+
+                // Check reverse: if targetValue is an integer and diagramValue is decimal >= 1
+                // This handles cases like 120 matching 1.2 blocks (120 / 100 = 1.2)
+                if (Number.isInteger(targetValue) && diagramValue >= 1 && !Number.isInteger(diagramValue)) {
+                    const targetAsDecimal = targetValue / 100;
+                    if (Math.abs(diagramValue - targetAsDecimal) < 0.0001) {
+                        matchedIndex = i;
+                        matchedBlockValue = diagramValue;
+                        blockValue = diagramValue;
+                        this.log('found matching choice (percent to decimal)', i, ':', targetValue, '/ 100 =', targetAsDecimal, '=', diagramValue);
+                        break;
+                    }
+                }
+
+                this.log('choice', i, 'does not match:', diagramValue, '!=', targetValue);
             }
 
             if (matchedIndex === -1) {

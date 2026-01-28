@@ -297,6 +297,23 @@ export class MatchPairsSolver extends BaseSolver {
     private hasNearestRounding = false;
     private roundingBase = 10;
 
+    /**
+     * Нормализует число для сравнения, округляя до разумного количества знаков после запятой
+     * Это помогает избежать проблем с точностью чисел с плавающей точкой
+     */
+    private normalizeForComparison(value: number): number {
+        // Для чисел меньше 1, используем больше знаков после запятой
+        if (Math.abs(value) < 1) {
+            return Math.round(value * 10000) / 10000;
+        }
+        // Для чисел от 1 до 100, используем 2 знака после запятой
+        if (Math.abs(value) < 100) {
+            return Math.round(value * 100) / 100;
+        }
+        // Для больших чисел, округляем до целого
+        return Math.round(value);
+    }
+
     private extractRoundingToken(
         token: Element,
         index: number,
@@ -439,14 +456,25 @@ export class MatchPairsSolver extends BaseSolver {
         pairs: { first: IToken; second: IToken }[],
         usedIndices: Set<number>,
     ): void {
+        this.log('matchBlockDiagrams: comparing', blockDiagrams.length, 'blocks with', numbers.length, 'numbers');
+
+        // Log all values for debugging
+        this.log('matchBlockDiagrams: blocks:', blockDiagrams.map(b => `${b.rawValue}=${b.numericValue}`).join(', '));
+        this.log('matchBlockDiagrams: numbers:', numbers.map(n => `${n.rawValue}=${n.numericValue}`).join(', '));
+
         for (const block of blockDiagrams) {
             if (usedIndices.has(block.index) || block.numericValue === null) continue;
+
+            this.log('matchBlockDiagrams: checking block', block.rawValue, '=', block.numericValue);
 
             for (const num of numbers) {
                 if (usedIndices.has(num.index) || num.numericValue === null) {
                     continue;
                 }
 
+                this.log('matchBlockDiagrams: comparing block', block.numericValue, 'with number', num.numericValue);
+
+                // Direct match
                 if (Math.abs(block.numericValue - num.numericValue) < 0.0001) {
                     pairs.push({ first: block, second: num });
                     usedIndices.add(block.index);
@@ -454,8 +482,72 @@ export class MatchPairsSolver extends BaseSolver {
                     this.log('found block diagram pair:', block.rawValue, '=', num.rawValue);
                     break;
                 }
+
+                // Handle case where block diagram shows decimal * 100 (e.g., 175 = 1.75)
+                // Check if block / 100 matches the number
+                const blockDividedBy100 = block.numericValue / 100;
+                if (Math.abs(blockDividedBy100 - num.numericValue) < 0.0001) {
+                    pairs.push({ first: block, second: num });
+                    usedIndices.add(block.index);
+                    usedIndices.add(num.index);
+                    this.log('found block diagram pair (decimal match):', block.rawValue, '/ 100 =', num.rawValue);
+                    break;
+                }
+
+                // Handle reverse case: number * 100 matches block
+                // This is the most common case: block diagrams show numbers scaled by 100
+                // (e.g., 175 blocks = 1.75, 235 blocks = 2.35, 260 blocks = 2.6)
+                const numTimes100 = num.numericValue * 100;
+
+                // Use rounding to handle floating point precision issues
+                // Round both values to nearest integer for comparison
+                const roundedBlock = Math.round(block.numericValue);
+                const roundedNumTimes100 = Math.round(numTimes100);
+
+                this.log('matchBlockDiagrams: rounded comparison - block:', roundedBlock, 'num*100:', roundedNumTimes100, '(num:', num.numericValue, ', num*100 raw:', numTimes100, ')');
+
+                // Primary check: rounded values match exactly
+                if (roundedBlock === roundedNumTimes100) {
+                    pairs.push({ first: block, second: num });
+                    usedIndices.add(block.index);
+                    usedIndices.add(num.index);
+                    this.log('found block diagram pair (reverse decimal match):', block.rawValue, '=', num.rawValue, '* 100');
+                    break;
+                }
+
+                // Secondary check: use tolerance for floating point comparison
+                // This handles cases where rounding doesn't work perfectly
+                // Use a more generous tolerance (1.0) to handle precision issues
+                const diff = Math.abs(block.numericValue - numTimes100);
+                this.log('matchBlockDiagrams: tolerance check - diff:', diff, 'block:', block.numericValue, 'num*100:', numTimes100);
+                if (diff < 1.0) {
+                    pairs.push({ first: block, second: num });
+                    usedIndices.add(block.index);
+                    usedIndices.add(num.index);
+                    this.log('found block diagram pair (tolerance match):', block.rawValue, '≈', num.rawValue, '* 100');
+                    break;
+                }
+
+                // Additional check: if block is much larger than number, try dividing
+                // This handles cases where block diagram represents a scaled version
+                if (block.numericValue > num.numericValue * 10) {
+                    // Try dividing block by powers of 10 to find match
+                    for (let scale = 10; scale <= 1000; scale *= 10) {
+                        const scaled = block.numericValue / scale;
+                        if (Math.abs(scaled - num.numericValue) < 0.0001) {
+                            pairs.push({ first: block, second: num });
+                            usedIndices.add(block.index);
+                            usedIndices.add(num.index);
+                            this.log('found block diagram pair (scaled match):', block.rawValue, '/', scale, '=', num.rawValue);
+                            break;
+                        }
+                    }
+                    if (usedIndices.has(block.index)) break;
+                }
             }
         }
+
+        this.log('matchBlockDiagrams: found', pairs.length, 'pairs');
     }
 
     private matchFactors(

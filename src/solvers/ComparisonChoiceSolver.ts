@@ -36,6 +36,13 @@ export class ComparisonChoiceSolver extends BaseSolver {
         if (!annotation?.textContent) return false;
 
         const text = annotation.textContent;
+
+        // Don't match if equation has = sign (that's for EquationBlankSolver)
+        if (text.includes('=') && !text.includes('>=') && !text.includes('<=') &&
+            !text.includes('\\ge') && !text.includes('\\le')) {
+            return false;
+        }
+
         const hasComparison = text.includes('>') || text.includes('<') ||
             text.includes('\\gt') || text.includes('\\lt') ||
             text.includes('\\ge') || text.includes('\\le');
@@ -149,6 +156,9 @@ export class ComparisonChoiceSolver extends BaseSolver {
                 break;
             }
         }
+
+        // Remove \duoblank{...} before evaluating (replace with empty string)
+        leftSide = leftSide.replace(/\\duoblank\{[^}]*\}/g, '');
 
         // Convert fractions to evaluable format
         leftSide = convertLatexFractions(leftSide);

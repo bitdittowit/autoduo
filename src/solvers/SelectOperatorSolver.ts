@@ -28,23 +28,46 @@ export class SelectOperatorSolver extends BaseSolver {
      */
     canSolve(context: IChallengeContext): boolean {
         if (!context.equationContainer || !context.choices?.length) {
+            this.logDebug('canSolve: missing equationContainer or choices');
             return false;
         }
 
         // Check if equation contains blank between two values
         const annotation = context.equationContainer.querySelector('annotation');
-        if (!annotation?.textContent) return false;
+        if (!annotation?.textContent) {
+            this.logDebug('canSolve: no annotation found');
+            return false;
+        }
 
         const text = annotation.textContent;
         const hasBlank = text.includes('\\duoblank');
+        this.logDebug('canSolve: equation text:', text, 'hasBlank:', hasBlank);
 
         // Check if choices contain operators
-        const hasOperatorChoices = context.choices.some(choice => {
-            const choiceText = choice?.textContent?.trim() ?? '';
-            return choiceText === '<' || choiceText === '>' || choiceText === '=' ||
-                   choiceText.includes('\\lt') || choiceText.includes('\\gt');
+        const hasOperatorChoices = context.choices.some((choice, index) => {
+            if (!choice) return false;
+
+            // Check text content
+            const choiceText = choice.textContent?.trim() ?? '';
+            if (choiceText === '<' || choiceText === '>' || choiceText === '=') {
+                this.logDebug('canSolve: found operator in text of choice', index, ':', choiceText);
+                return true;
+            }
+
+            // Check annotation (for KaTeX)
+            const choiceAnnotation = choice.querySelector('annotation');
+            const annotationText = choiceAnnotation?.textContent?.trim() ?? '';
+            if (annotationText.includes('\\lt') || annotationText.includes('\\gt') ||
+                annotationText.includes('=') || annotationText.includes('<') ||
+                annotationText.includes('>')) {
+                this.logDebug('canSolve: found operator in annotation of choice', index, ':', annotationText);
+                return true;
+            }
+
+            return false;
         });
 
+        this.logDebug('canSolve: hasOperatorChoices:', hasOperatorChoices, 'result:', hasBlank && hasOperatorChoices);
         return hasBlank && hasOperatorChoices;
     }
 
@@ -87,7 +110,9 @@ export class SelectOperatorSolver extends BaseSolver {
             if (!choice) continue;
 
             const choiceOperator = this.parseOperatorFromChoice(choice);
-            this.logDebug('choice', i, '=', choiceOperator);
+            const choiceText = choice.textContent?.trim() ?? '';
+            const choiceAnnotation = choice.querySelector('annotation')?.textContent?.trim() ?? '';
+            this.log('choice', i, 'text:', choiceText, 'annotation:', choiceAnnotation, 'parsed operator:', choiceOperator);
 
             if (choiceOperator === correctOperator) {
                 matchedIndex = i;
@@ -120,43 +145,51 @@ export class SelectOperatorSolver extends BaseSolver {
      */
     private extractValues(eqText: string): { leftValue: number; rightValue: number } | null {
         let cleaned = cleanLatexWrappers(eqText);
+        this.logDebug('after cleanLatexWrappers:', cleaned);
 
         // Replace blank with marker
         cleaned = cleaned.replace(/\\duoblank\{[^}]*\}/g, ' BLANK ');
+        this.logDebug('after blank replacement:', cleaned);
 
         // Remove LaTeX spacing
         cleaned = cleaned.replace(/\\[;,]/g, ' ');
         cleaned = cleaned.replace(/\\quad/g, ' ');
         cleaned = cleaned.replace(/\s+/g, ' ').trim();
+        this.logDebug('after spacing cleanup:', cleaned);
 
         // Split by BLANK
         const parts = cleaned.split('BLANK');
         if (parts.length !== 2 || !parts[0] || !parts[1]) {
-            this.logError('could not split by BLANK');
+            this.logError('could not split by BLANK, parts:', parts);
             return null;
         }
 
         let leftPart = parts[0].trim();
         let rightPart = parts[1].trim();
+        this.logDebug('split parts - left:', leftPart, 'right:', rightPart);
 
         // Remove outer braces
         leftPart = this.removeBraces(leftPart);
         rightPart = this.removeBraces(rightPart);
+        this.logDebug('after removeBraces - left:', leftPart, 'right:', rightPart);
 
         // Convert fractions
         leftPart = convertLatexFractions(leftPart);
         rightPart = convertLatexFractions(rightPart);
+        this.logDebug('after convertLatexFractions - left:', leftPart, 'right:', rightPart);
 
         // Remove remaining braces
         leftPart = leftPart.replace(/[{}]/g, '').trim();
         rightPart = rightPart.replace(/[{}]/g, '').trim();
+        this.logDebug('after brace removal - left:', leftPart, 'right:', rightPart);
 
         // Evaluate
         const leftValue = evaluateMathExpression(leftPart);
         const rightValue = evaluateMathExpression(rightPart);
+        this.logDebug('evaluated - left:', leftValue, 'right:', rightValue);
 
         if (leftValue === null || rightValue === null) {
-            this.logError('could not evaluate values');
+            this.logError('could not evaluate values - left:', leftValue, 'right:', rightValue);
             return null;
         }
 
@@ -188,17 +221,36 @@ export class SelectOperatorSolver extends BaseSolver {
      * Извлекает оператор из варианта ответа
      */
     private parseOperatorFromChoice(choice: Element): Operator | null {
-        const text = choice.textContent?.trim() ?? '';
-
         // Check annotation first (for KaTeX)
         const annotation = choice.querySelector('annotation');
         const annotationText = annotation?.textContent?.trim() ?? '';
 
+        // Check text content as fallback
+        const text = choice.textContent?.trim() ?? '';
+
+        // Combine both sources for checking
         const checkText = annotationText || text;
 
-        if (checkText.includes('\\lt') || checkText === '<') return '<';
-        if (checkText.includes('\\gt') || checkText === '>') return '>';
-        if (checkText === '=' || checkText.includes('=')) return '=';
+        // Check for less than operator
+        if (checkText.includes('\\lt') || checkText.includes('<')) {
+            // Make sure it's not <=
+            if (!checkText.includes('\\le') && !checkText.includes('<=')) {
+                return '<';
+            }
+        }
+
+        // Check for greater than operator
+        if (checkText.includes('\\gt') || checkText.includes('>')) {
+            // Make sure it's not >=
+            if (!checkText.includes('\\ge') && !checkText.includes('>=')) {
+                return '>';
+            }
+        }
+
+        // Check for equals operator
+        if (checkText.includes('=')) {
+            return '=';
+        }
 
         return null;
     }

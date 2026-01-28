@@ -58,9 +58,53 @@ export function cleanLatexWrappers(str: string): string {
  * @returns строка со стандартными операторами
  */
 export function convertLatexOperators(str: string): string {
-    return str
-        .replace(/\\left\(/g, '(')    // \left( -> (
-        .replace(/\\right\)/g, ')')   // \right) -> )
+    let result = str;
+
+    // First, normalize \left( and \right) to regular parentheses
+    result = result.replace(/\\left\(/g, '(');
+    result = result.replace(/\\right\)/g, ')');
+
+    // Handle \neg(...) - negation of expression in parentheses
+    // \neg(-0.55) -> -(-0.55) which evaluates to 0.55
+    // Process \neg with parentheses by finding matching parentheses
+    let maxIterations = 10; // Prevent infinite loops
+    while (result.includes('\\neg') && maxIterations > 0) {
+        maxIterations--;
+        const negMatch = result.match(/\\neg\s*\(/);
+        if (negMatch?.index !== undefined) {
+            const startIndex = negMatch.index;
+            const parenStart = startIndex + negMatch[0].length - 1; // Position of (
+
+            // Find matching closing parenthesis
+            let depth = 1;
+            let parenEnd = parenStart + 1;
+            while (depth > 0 && parenEnd < result.length) {
+                if (result[parenEnd] === '(') depth++;
+                else if (result[parenEnd] === ')') depth--;
+                parenEnd++;
+            }
+
+            if (depth === 0) {
+                // Extract the expression inside parentheses
+                const innerExpr = result.substring(parenStart + 1, parenEnd - 1);
+                // Replace \neg(...) with -(...)
+                result = result.substring(0, startIndex) + '-(' + innerExpr + ')' + result.substring(parenEnd);
+            } else {
+                // If we can't find matching paren, just replace \neg with -
+                result = result.replace(/\\neg\s*/, '-');
+                break;
+            }
+        } else {
+            // Handle \neg before number (without parentheses)
+            result = result.replace(/\\neg\s*(\d+)/g, '-$1');
+            break;
+        }
+    }
+
+    // If there are still \neg commands left, just replace them with -
+    result = result.replace(/\\neg\s*/g, '-');
+
+    return result
         .replace(/\\left\[/g, '[')    // \left[ -> [
         .replace(/\\right\]/g, ']')   // \right] -> ]
         .replace(/\\left\{/g, '{')    // \left\{ -> {

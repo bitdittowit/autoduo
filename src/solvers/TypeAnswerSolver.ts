@@ -101,12 +101,42 @@ export class TypeAnswerSolver extends BaseSolver {
         textInput: HTMLInputElement,
         equation: string,
     ): IEquationResult | null {
-        const hasInequality = equation.includes('>') || equation.includes('<') ||
-            equation.includes('\\gt') || equation.includes('\\lt') ||
-            equation.includes('\\ge') || equation.includes('\\le');
         const hasBlank = equation.includes('\\duoblank');
+        if (!hasBlank) {
+            return null;
+        }
 
-        if (!hasInequality || !hasBlank) {
+        // If equation has = sign, check if it's truly an inequality or just an equation
+        if (equation.includes('=')) {
+            // Check for explicit inequality operators
+            const hasExplicitInequality =
+                equation.includes('>=') || equation.includes('<=') ||
+                equation.includes('\\ge') || equation.includes('\\le') ||
+                equation.includes('\\gt') || equation.includes('\\lt');
+
+            if (!hasExplicitInequality) {
+                // Check if > or < characters are part of \left or \right commands
+                // If they are, then it's not an inequality
+                const hasLeftRight = equation.includes('\\left') || equation.includes('\\right');
+
+                // If there's an = sign, no explicit inequality operators, and any >/< are from \left/\right,
+                // then this is definitely an equation, not an inequality
+                if (hasLeftRight || (!equation.includes('>') && !equation.includes('<'))) {
+                    return null; // This is an equation, not an inequality
+                }
+            }
+        }
+
+        // Check for inequality operators (re-check for clarity)
+        const hasInequality =
+            equation.includes('>=') || equation.includes('<=') ||
+            equation.includes('\\ge') || equation.includes('\\le') ||
+            equation.includes('\\gt') || equation.includes('\\lt') ||
+            // Check for standalone > or < that are not part of \left or \right commands
+            (equation.includes('>') && !equation.includes('\\left') && !equation.includes('\\right')) ||
+            (equation.includes('<') && !equation.includes('\\left') && !equation.includes('\\right'));
+
+        if (!hasInequality) {
             return null;
         }
 

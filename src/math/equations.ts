@@ -33,6 +33,10 @@ export function solveEquationWithBlank(equation: string): number | null {
     cleaned = cleanLatexWrappers(cleaned);
     cleaned = cleanLatexForEval(cleaned);
 
+    // Normalize negative numbers in parentheses: (-1.95) -> -1.95
+    // This helps with pattern matching and evaluation
+    cleaned = cleaned.replace(/\((-?\d+\.?\d*)\)/g, '$1');
+
     logger.debug('solveEquationWithBlank: cleaned', cleaned);
 
     // Split by = to get left and right sides
@@ -103,21 +107,21 @@ export function solveForX(exprWithX: string, otherSide: string): number | null {
 function solveAlgebraically(exprWithX: string, target: number): number | null {
     const patterns: { pattern: RegExp; solve: (n: number) => number }[] = [
         { pattern: /^X$/, solve: (): number => target },
-        { pattern: /^X\+([0-9.]+)$/, solve: (n): number => target - n },
-        { pattern: /^X-([0-9.]+)$/, solve: (n): number => target + n },
-        { pattern: /^([0-9.]+)\+X$/, solve: (n): number => target - n },
-        { pattern: /^([0-9.]+)-X$/, solve: (n): number => n - target },
-        { pattern: /^X\*([0-9.]+)$/, solve: (n): number => target / n },
-        { pattern: /^([0-9.]+)\*X$/, solve: (n): number => target / n },
-        { pattern: /^X\/([0-9.]+)$/, solve: (n): number => target * n },
-        { pattern: /^([0-9.]+)\/X$/, solve: (n): number => n / target },
+        { pattern: /^X\+([0-9.-]+)$/, solve: (n): number => target - n },
+        { pattern: /^X-([0-9.-]+)$/, solve: (n): number => target + n },
+        { pattern: /^([0-9.-]+)\+X$/, solve: (n): number => target - n },
+        { pattern: /^([0-9.-]+)-X$/, solve: (n): number => n - target },
+        { pattern: /^X\*([0-9.-]+)$/, solve: (n): number => target / n },
+        { pattern: /^([0-9.-]+)\*X$/, solve: (n): number => target / n },
+        { pattern: /^X\/([0-9.-]+)$/, solve: (n): number => target * n },
+        { pattern: /^([0-9.-]+)\/X$/, solve: (n): number => n / target },
         // Patterns with parentheses
-        { pattern: /^\(X\)\+([0-9.]+)$/, solve: (n): number => target - n },
-        { pattern: /^\(X\)-([0-9.]+)$/, solve: (n): number => target + n },
-        { pattern: /^\(X\)\*([0-9.]+)$/, solve: (n): number => target / n },
-        { pattern: /^\(X\)\/([0-9.]+)$/, solve: (n): number => target * n },
-        { pattern: /^([0-9.]+)\*\(X\)$/, solve: (n): number => target / n },
-        { pattern: /^([0-9.]+)\/\(X\)$/, solve: (n): number => n / target },
+        { pattern: /^\(X\)\+([0-9.-]+)$/, solve: (n): number => target - n },
+        { pattern: /^\(X\)-([0-9.-]+)$/, solve: (n): number => target + n },
+        { pattern: /^\(X\)\*([0-9.-]+)$/, solve: (n): number => target / n },
+        { pattern: /^\(X\)\/([0-9.-]+)$/, solve: (n): number => target * n },
+        { pattern: /^([0-9.-]+)\*\(X\)$/, solve: (n): number => target / n },
+        { pattern: /^([0-9.-]+)\/\(X\)$/, solve: (n): number => n / target },
     ];
 
     for (const { pattern, solve } of patterns) {
@@ -154,6 +158,21 @@ function solveBruteForce(
         if (testResult !== null && Math.abs(testResult - target) < 0.0001) {
             logger.debug('solveForX: brute force solution X =', x);
             return x;
+        }
+    }
+
+    // If no integer solution found, try decimal values with step 0.01
+    // This handles cases like X + (-1.95) = 0 where X = 1.95
+    const step = 0.01;
+    for (let x = min; x <= max; x += step) {
+        // Round to 2 decimal places to avoid floating point precision issues
+        const roundedX = Math.round(x * 100) / 100;
+        const testExpr = exprWithX.replace(/X/g, `(${roundedX})`);
+        const testResult = evaluateMathExpression(testExpr);
+
+        if (testResult !== null && Math.abs(testResult - target) < 0.0001) {
+            logger.debug('solveForX: brute force solution (decimal) X =', roundedX);
+            return roundedX;
         }
     }
 

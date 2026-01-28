@@ -69,6 +69,23 @@ describe('latex utilities', () => {
             expect(convertLatexOperators('6 ÷ 2')).toBe('6 / 2');
             expect(convertLatexOperators('5 − 2')).toBe('5 - 2');
         });
+
+        it('should convert \\neg before number', () => {
+            expect(convertLatexOperators('\\neg 29')).toBe('-29');
+            expect(convertLatexOperators('\\neg 5')).toBe('-5');
+        });
+
+        it('should convert \\neg with parentheses', () => {
+            expect(convertLatexOperators('\\neg(-0.55)')).toBe('-(-0.55)');
+            expect(convertLatexOperators('\\neg(-2.6)')).toBe('-(-2.6)');
+            expect(convertLatexOperators('\\neg(-2.45)')).toBe('-(-2.45)');
+            expect(convertLatexOperators('\\neg(5)')).toBe('-(5)');
+        });
+
+        it('should convert \\neg with \\left( and \\right)', () => {
+            expect(convertLatexOperators('\\neg\\left(-0.55\\right)')).toBe('-(-0.55)');
+            expect(convertLatexOperators('\\neg\\left(5\\right)')).toBe('-(5)');
+        });
     });
 
     describe('convertLatexFractions', () => {

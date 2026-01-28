@@ -114,6 +114,18 @@ export class PatternTableSolver extends BaseSolver {
 
             if (choiceValue === null) continue;
 
+            // Extract number from choice value
+            // Handles formats like: "9", "X=9", "X = 9", "9.5", "-5", etc.
+            const numberMatch = choiceValue.match(/(-?\d+\.?\d*)/);
+            if (numberMatch && numberMatch[1]) {
+                const choiceNum = parseFloat(numberMatch[1]);
+                if (!isNaN(choiceNum) && choiceNum === answer) {
+                    this.log('found matching choice at index', i);
+                    return i;
+                }
+            }
+
+            // Fallback: try parsing the whole string as a number
             const choiceNum = parseFloat(choiceValue);
             if (!isNaN(choiceNum) && choiceNum === answer) {
                 this.log('found matching choice at index', i);

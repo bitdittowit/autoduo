@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AutoDuo
 // @namespace    https://github.com/bitdittowit/autoduo
-// @version      1.0.17
+// @version      1.0.19
 // @description  Auto-solve Duolingo Math challenges
 // @author       bitdittowit
 // @match        https://www.duolingo.com/*
@@ -994,9 +994,51 @@ var AutoDuo = (function (exports) {
      * @returns строка со стандартными операторами
      */
     function convertLatexOperators(str) {
-        return str
-            .replace(/\\left\(/g, '(') // \left( -> (
-            .replace(/\\right\)/g, ')') // \right) -> )
+        let result = str;
+        // First, normalize \left( and \right) to regular parentheses
+        result = result.replace(/\\left\(/g, '(');
+        result = result.replace(/\\right\)/g, ')');
+        // Handle \neg(...) - negation of expression in parentheses
+        // \neg(-0.55) -> -(-0.55) which evaluates to 0.55
+        // Process \neg with parentheses by finding matching parentheses
+        let maxIterations = 10; // Prevent infinite loops
+        while (result.includes('\\neg') && maxIterations > 0) {
+            maxIterations--;
+            const negMatch = result.match(/\\neg\s*\(/);
+            if (negMatch?.index !== undefined) {
+                const startIndex = negMatch.index;
+                const parenStart = startIndex + negMatch[0].length - 1; // Position of (
+                // Find matching closing parenthesis
+                let depth = 1;
+                let parenEnd = parenStart + 1;
+                while (depth > 0 && parenEnd < result.length) {
+                    if (result[parenEnd] === '(')
+                        depth++;
+                    else if (result[parenEnd] === ')')
+                        depth--;
+                    parenEnd++;
+                }
+                if (depth === 0) {
+                    // Extract the expression inside parentheses
+                    const innerExpr = result.substring(parenStart + 1, parenEnd - 1);
+                    // Replace \neg(...) with -(...)
+                    result = result.substring(0, startIndex) + '-(' + innerExpr + ')' + result.substring(parenEnd);
+                }
+                else {
+                    // If we can't find matching paren, just replace \neg with -
+                    result = result.replace(/\\neg\s*/, '-');
+                    break;
+                }
+            }
+            else {
+                // Handle \neg before number (without parentheses)
+                result = result.replace(/\\neg\s*(\d+)/g, '-$1');
+                break;
+            }
+        }
+        // If there are still \neg commands left, just replace them with -
+        result = result.replace(/\\neg\s*/g, '-');
+        return result
             .replace(/\\left\[/g, '[') // \left[ -> [
             .replace(/\\right\]/g, ']') // \right] -> ]
             .replace(/\\left\{/g, '{') // \left\{ -> {
@@ -1630,6 +1672,9 @@ var AutoDuo = (function (exports) {
             .replace(/\\right\}/g, '}');
         cleaned = cleanLatexWrappers(cleaned);
         cleaned = cleanLatexForEval(cleaned);
+        // Normalize negative numbers in parentheses: (-1.95) -> -1.95
+        // This helps with pattern matching and evaluation
+        cleaned = cleaned.replace(/\((-?\d+\.?\d*)\)/g, '$1');
         logger.debug('solveEquationWithBlank: cleaned', cleaned);
         // Split by = to get left and right sides
         const parts = cleaned.split('=');
@@ -1691,21 +1736,21 @@ var AutoDuo = (function (exports) {
     function solveAlgebraically(exprWithX, target) {
         const patterns = [
             { pattern: /^X$/, solve: () => target },
-            { pattern: /^X\+([0-9.]+)$/, solve: (n) => target - n },
-            { pattern: /^X-([0-9.]+)$/, solve: (n) => target + n },
-            { pattern: /^([0-9.]+)\+X$/, solve: (n) => target - n },
-            { pattern: /^([0-9.]+)-X$/, solve: (n) => n - target },
-            { pattern: /^X\*([0-9.]+)$/, solve: (n) => target / n },
-            { pattern: /^([0-9.]+)\*X$/, solve: (n) => target / n },
-            { pattern: /^X\/([0-9.]+)$/, solve: (n) => target * n },
-            { pattern: /^([0-9.]+)\/X$/, solve: (n) => n / target },
+            { pattern: /^X\+([0-9.-]+)$/, solve: (n) => target - n },
+            { pattern: /^X-([0-9.-]+)$/, solve: (n) => target + n },
+            { pattern: /^([0-9.-]+)\+X$/, solve: (n) => target - n },
+            { pattern: /^([0-9.-]+)-X$/, solve: (n) => n - target },
+            { pattern: /^X\*([0-9.-]+)$/, solve: (n) => target / n },
+            { pattern: /^([0-9.-]+)\*X$/, solve: (n) => target / n },
+            { pattern: /^X\/([0-9.-]+)$/, solve: (n) => target * n },
+            { pattern: /^([0-9.-]+)\/X$/, solve: (n) => n / target },
             // Patterns with parentheses
-            { pattern: /^\(X\)\+([0-9.]+)$/, solve: (n) => target - n },
-            { pattern: /^\(X\)-([0-9.]+)$/, solve: (n) => target + n },
-            { pattern: /^\(X\)\*([0-9.]+)$/, solve: (n) => target / n },
-            { pattern: /^\(X\)\/([0-9.]+)$/, solve: (n) => target * n },
-            { pattern: /^([0-9.]+)\*\(X\)$/, solve: (n) => target / n },
-            { pattern: /^([0-9.]+)\/\(X\)$/, solve: (n) => n / target },
+            { pattern: /^\(X\)\+([0-9.-]+)$/, solve: (n) => target - n },
+            { pattern: /^\(X\)-([0-9.-]+)$/, solve: (n) => target + n },
+            { pattern: /^\(X\)\*([0-9.-]+)$/, solve: (n) => target / n },
+            { pattern: /^\(X\)\/([0-9.-]+)$/, solve: (n) => target * n },
+            { pattern: /^([0-9.-]+)\*\(X\)$/, solve: (n) => target / n },
+            { pattern: /^([0-9.-]+)\/\(X\)$/, solve: (n) => n / target },
         ];
         for (const { pattern, solve } of patterns) {
             const match = exprWithX.match(pattern);
@@ -1733,6 +1778,19 @@ var AutoDuo = (function (exports) {
             if (testResult !== null && Math.abs(testResult - target) < 0.0001) {
                 logger.debug('solveForX: brute force solution X =', x);
                 return x;
+            }
+        }
+        // If no integer solution found, try decimal values with step 0.01
+        // This handles cases like X + (-1.95) = 0 where X = 1.95
+        const step = 0.01;
+        for (let x = min; x <= max; x += step) {
+            // Round to 2 decimal places to avoid floating point precision issues
+            const roundedX = Math.round(x * 100) / 100;
+            const testExpr = exprWithX.replace(/X/g, `(${roundedX})`);
+            const testResult = evaluateMathExpression(testExpr);
+            if (testResult !== null && Math.abs(testResult - target) < 0.0001) {
+                logger.debug('solveForX: brute force solution (decimal) X =', roundedX);
+                return roundedX;
             }
         }
         logger.debug('solveForX: no solution found in range', min, 'to', max);
@@ -1914,11 +1972,35 @@ var AutoDuo = (function (exports) {
          * Пробует решить как неравенство с пропуском
          */
         trySolveInequality(textInput, equation) {
-            const hasInequality = equation.includes('>') || equation.includes('<') ||
-                equation.includes('\\gt') || equation.includes('\\lt') ||
-                equation.includes('\\ge') || equation.includes('\\le');
             const hasBlank = equation.includes('\\duoblank');
-            if (!hasInequality || !hasBlank) {
+            if (!hasBlank) {
+                return null;
+            }
+            // If equation has = sign, check if it's truly an inequality or just an equation
+            if (equation.includes('=')) {
+                // Check for explicit inequality operators
+                const hasExplicitInequality = equation.includes('>=') || equation.includes('<=') ||
+                    equation.includes('\\ge') || equation.includes('\\le') ||
+                    equation.includes('\\gt') || equation.includes('\\lt');
+                if (!hasExplicitInequality) {
+                    // Check if > or < characters are part of \left or \right commands
+                    // If they are, then it's not an inequality
+                    const hasLeftRight = equation.includes('\\left') || equation.includes('\\right');
+                    // If there's an = sign, no explicit inequality operators, and any >/< are from \left/\right,
+                    // then this is definitely an equation, not an inequality
+                    if (hasLeftRight || (!equation.includes('>') && !equation.includes('<'))) {
+                        return null; // This is an equation, not an inequality
+                    }
+                }
+            }
+            // Check for inequality operators (re-check for clarity)
+            const hasInequality = equation.includes('>=') || equation.includes('<=') ||
+                equation.includes('\\ge') || equation.includes('\\le') ||
+                equation.includes('\\gt') || equation.includes('\\lt') ||
+                // Check for standalone > or < that are not part of \left or \right commands
+                (equation.includes('>') && !equation.includes('\\left') && !equation.includes('\\right')) ||
+                (equation.includes('<') && !equation.includes('\\left') && !equation.includes('\\right'));
+            if (!hasInequality) {
                 return null;
             }
             this.log('detected INEQUALITY with blank type');
@@ -2049,6 +2131,11 @@ var AutoDuo = (function (exports) {
             if (!annotation?.textContent)
                 return false;
             const text = annotation.textContent;
+            // Don't match if equation has = sign (that's for EquationBlankSolver)
+            if (text.includes('=') && !text.includes('>=') && !text.includes('<=') &&
+                !text.includes('\\ge') && !text.includes('\\le')) {
+                return false;
+            }
             const hasComparison = text.includes('>') || text.includes('<') ||
                 text.includes('\\gt') || text.includes('\\lt') ||
                 text.includes('\\ge') || text.includes('\\le');
@@ -2147,6 +2234,8 @@ var AutoDuo = (function (exports) {
                     break;
                 }
             }
+            // Remove \duoblank{...} before evaluating (replace with empty string)
+            leftSide = leftSide.replace(/\\duoblank\{[^}]*\}/g, '');
             // Convert fractions to evaluable format
             leftSide = convertLatexFractions(leftSide);
             return evaluateMathExpression(leftSide);
@@ -2953,20 +3042,40 @@ var AutoDuo = (function (exports) {
          */
         canSolve(context) {
             if (!context.equationContainer || !context.choices?.length) {
+                this.logDebug('canSolve: missing equationContainer or choices');
                 return false;
             }
             // Check if equation contains blank between two values
             const annotation = context.equationContainer.querySelector('annotation');
-            if (!annotation?.textContent)
+            if (!annotation?.textContent) {
+                this.logDebug('canSolve: no annotation found');
                 return false;
+            }
             const text = annotation.textContent;
             const hasBlank = text.includes('\\duoblank');
+            this.logDebug('canSolve: equation text:', text, 'hasBlank:', hasBlank);
             // Check if choices contain operators
-            const hasOperatorChoices = context.choices.some(choice => {
-                const choiceText = choice?.textContent?.trim() ?? '';
-                return choiceText === '<' || choiceText === '>' || choiceText === '=' ||
-                    choiceText.includes('\\lt') || choiceText.includes('\\gt');
+            const hasOperatorChoices = context.choices.some((choice, index) => {
+                if (!choice)
+                    return false;
+                // Check text content
+                const choiceText = choice.textContent?.trim() ?? '';
+                if (choiceText === '<' || choiceText === '>' || choiceText === '=') {
+                    this.logDebug('canSolve: found operator in text of choice', index, ':', choiceText);
+                    return true;
+                }
+                // Check annotation (for KaTeX)
+                const choiceAnnotation = choice.querySelector('annotation');
+                const annotationText = choiceAnnotation?.textContent?.trim() ?? '';
+                if (annotationText.includes('\\lt') || annotationText.includes('\\gt') ||
+                    annotationText.includes('=') || annotationText.includes('<') ||
+                    annotationText.includes('>')) {
+                    this.logDebug('canSolve: found operator in annotation of choice', index, ':', annotationText);
+                    return true;
+                }
+                return false;
             });
+            this.logDebug('canSolve: hasOperatorChoices:', hasOperatorChoices, 'result:', hasBlank && hasOperatorChoices);
             return hasBlank && hasOperatorChoices;
         }
         /**
@@ -3000,7 +3109,9 @@ var AutoDuo = (function (exports) {
                 if (!choice)
                     continue;
                 const choiceOperator = this.parseOperatorFromChoice(choice);
-                this.logDebug('choice', i, '=', choiceOperator);
+                const choiceText = choice.textContent?.trim() ?? '';
+                const choiceAnnotation = choice.querySelector('annotation')?.textContent?.trim() ?? '';
+                this.log('choice', i, 'text:', choiceText, 'annotation:', choiceAnnotation, 'parsed operator:', choiceOperator);
                 if (choiceOperator === correctOperator) {
                     matchedIndex = i;
                     this.log('found matching choice', i);
@@ -3028,34 +3139,42 @@ var AutoDuo = (function (exports) {
          */
         extractValues(eqText) {
             let cleaned = cleanLatexWrappers(eqText);
+            this.logDebug('after cleanLatexWrappers:', cleaned);
             // Replace blank with marker
             cleaned = cleaned.replace(/\\duoblank\{[^}]*\}/g, ' BLANK ');
+            this.logDebug('after blank replacement:', cleaned);
             // Remove LaTeX spacing
             cleaned = cleaned.replace(/\\[;,]/g, ' ');
             cleaned = cleaned.replace(/\\quad/g, ' ');
             cleaned = cleaned.replace(/\s+/g, ' ').trim();
+            this.logDebug('after spacing cleanup:', cleaned);
             // Split by BLANK
             const parts = cleaned.split('BLANK');
             if (parts.length !== 2 || !parts[0] || !parts[1]) {
-                this.logError('could not split by BLANK');
+                this.logError('could not split by BLANK, parts:', parts);
                 return null;
             }
             let leftPart = parts[0].trim();
             let rightPart = parts[1].trim();
+            this.logDebug('split parts - left:', leftPart, 'right:', rightPart);
             // Remove outer braces
             leftPart = this.removeBraces(leftPart);
             rightPart = this.removeBraces(rightPart);
+            this.logDebug('after removeBraces - left:', leftPart, 'right:', rightPart);
             // Convert fractions
             leftPart = convertLatexFractions(leftPart);
             rightPart = convertLatexFractions(rightPart);
+            this.logDebug('after convertLatexFractions - left:', leftPart, 'right:', rightPart);
             // Remove remaining braces
             leftPart = leftPart.replace(/[{}]/g, '').trim();
             rightPart = rightPart.replace(/[{}]/g, '').trim();
+            this.logDebug('after brace removal - left:', leftPart, 'right:', rightPart);
             // Evaluate
             const leftValue = evaluateMathExpression(leftPart);
             const rightValue = evaluateMathExpression(rightPart);
+            this.logDebug('evaluated - left:', leftValue, 'right:', rightValue);
             if (leftValue === null || rightValue === null) {
-                this.logError('could not evaluate values');
+                this.logError('could not evaluate values - left:', leftValue, 'right:', rightValue);
                 return null;
             }
             return { leftValue, rightValue };
@@ -3085,17 +3204,31 @@ var AutoDuo = (function (exports) {
          * Извлекает оператор из варианта ответа
          */
         parseOperatorFromChoice(choice) {
-            const text = choice.textContent?.trim() ?? '';
             // Check annotation first (for KaTeX)
             const annotation = choice.querySelector('annotation');
             const annotationText = annotation?.textContent?.trim() ?? '';
+            // Check text content as fallback
+            const text = choice.textContent?.trim() ?? '';
+            // Combine both sources for checking
             const checkText = annotationText || text;
-            if (checkText.includes('\\lt') || checkText === '<')
-                return '<';
-            if (checkText.includes('\\gt') || checkText === '>')
-                return '>';
-            if (checkText === '=' || checkText.includes('='))
+            // Check for less than operator
+            if (checkText.includes('\\lt') || checkText.includes('<')) {
+                // Make sure it's not <=
+                if (!checkText.includes('\\le') && !checkText.includes('<=')) {
+                    return '<';
+                }
+            }
+            // Check for greater than operator
+            if (checkText.includes('\\gt') || checkText.includes('>')) {
+                // Make sure it's not >=
+                if (!checkText.includes('\\ge') && !checkText.includes('>=')) {
+                    return '>';
+                }
+            }
+            // Check for equals operator
+            if (checkText.includes('=')) {
                 return '=';
+            }
             return null;
         }
     }
@@ -3724,6 +3857,22 @@ var AutoDuo = (function (exports) {
         }
         hasNearestRounding = false;
         roundingBase = 10;
+        /**
+         * Нормализует число для сравнения, округляя до разумного количества знаков после запятой
+         * Это помогает избежать проблем с точностью чисел с плавающей точкой
+         */
+        normalizeForComparison(value) {
+            // Для чисел меньше 1, используем больше знаков после запятой
+            if (Math.abs(value) < 1) {
+                return Math.round(value * 10000) / 10000;
+            }
+            // Для чисел от 1 до 100, используем 2 знака после запятой
+            if (Math.abs(value) < 100) {
+                return Math.round(value * 100) / 100;
+            }
+            // Для больших чисел, округляем до целого
+            return Math.round(value);
+        }
         extractRoundingToken(token, index, roundingBase) {
             // Check for block diagram first
             const iframe = token.querySelector('iframe[title="Math Web Element"]');
@@ -3819,13 +3968,20 @@ var AutoDuo = (function (exports) {
             }
         }
         matchBlockDiagrams(blockDiagrams, numbers, pairs, usedIndices) {
+            this.log('matchBlockDiagrams: comparing', blockDiagrams.length, 'blocks with', numbers.length, 'numbers');
+            // Log all values for debugging
+            this.log('matchBlockDiagrams: blocks:', blockDiagrams.map(b => `${b.rawValue}=${b.numericValue}`).join(', '));
+            this.log('matchBlockDiagrams: numbers:', numbers.map(n => `${n.rawValue}=${n.numericValue}`).join(', '));
             for (const block of blockDiagrams) {
                 if (usedIndices.has(block.index) || block.numericValue === null)
                     continue;
+                this.log('matchBlockDiagrams: checking block', block.rawValue, '=', block.numericValue);
                 for (const num of numbers) {
                     if (usedIndices.has(num.index) || num.numericValue === null) {
                         continue;
                     }
+                    this.log('matchBlockDiagrams: comparing block', block.numericValue, 'with number', num.numericValue);
+                    // Direct match
                     if (Math.abs(block.numericValue - num.numericValue) < 0.0001) {
                         pairs.push({ first: block, second: num });
                         usedIndices.add(block.index);
@@ -3833,8 +3989,65 @@ var AutoDuo = (function (exports) {
                         this.log('found block diagram pair:', block.rawValue, '=', num.rawValue);
                         break;
                     }
+                    // Handle case where block diagram shows decimal * 100 (e.g., 175 = 1.75)
+                    // Check if block / 100 matches the number
+                    const blockDividedBy100 = block.numericValue / 100;
+                    if (Math.abs(blockDividedBy100 - num.numericValue) < 0.0001) {
+                        pairs.push({ first: block, second: num });
+                        usedIndices.add(block.index);
+                        usedIndices.add(num.index);
+                        this.log('found block diagram pair (decimal match):', block.rawValue, '/ 100 =', num.rawValue);
+                        break;
+                    }
+                    // Handle reverse case: number * 100 matches block
+                    // This is the most common case: block diagrams show numbers scaled by 100
+                    // (e.g., 175 blocks = 1.75, 235 blocks = 2.35, 260 blocks = 2.6)
+                    const numTimes100 = num.numericValue * 100;
+                    // Use rounding to handle floating point precision issues
+                    // Round both values to nearest integer for comparison
+                    const roundedBlock = Math.round(block.numericValue);
+                    const roundedNumTimes100 = Math.round(numTimes100);
+                    this.log('matchBlockDiagrams: rounded comparison - block:', roundedBlock, 'num*100:', roundedNumTimes100, '(num:', num.numericValue, ', num*100 raw:', numTimes100, ')');
+                    // Primary check: rounded values match exactly
+                    if (roundedBlock === roundedNumTimes100) {
+                        pairs.push({ first: block, second: num });
+                        usedIndices.add(block.index);
+                        usedIndices.add(num.index);
+                        this.log('found block diagram pair (reverse decimal match):', block.rawValue, '=', num.rawValue, '* 100');
+                        break;
+                    }
+                    // Secondary check: use tolerance for floating point comparison
+                    // This handles cases where rounding doesn't work perfectly
+                    // Use a more generous tolerance (1.0) to handle precision issues
+                    const diff = Math.abs(block.numericValue - numTimes100);
+                    this.log('matchBlockDiagrams: tolerance check - diff:', diff, 'block:', block.numericValue, 'num*100:', numTimes100);
+                    if (diff < 1.0) {
+                        pairs.push({ first: block, second: num });
+                        usedIndices.add(block.index);
+                        usedIndices.add(num.index);
+                        this.log('found block diagram pair (tolerance match):', block.rawValue, '≈', num.rawValue, '* 100');
+                        break;
+                    }
+                    // Additional check: if block is much larger than number, try dividing
+                    // This handles cases where block diagram represents a scaled version
+                    if (block.numericValue > num.numericValue * 10) {
+                        // Try dividing block by powers of 10 to find match
+                        for (let scale = 10; scale <= 1000; scale *= 10) {
+                            const scaled = block.numericValue / scale;
+                            if (Math.abs(scaled - num.numericValue) < 0.0001) {
+                                pairs.push({ first: block, second: num });
+                                usedIndices.add(block.index);
+                                usedIndices.add(num.index);
+                                this.log('found block diagram pair (scaled match):', block.rawValue, '/', scale, '=', num.rawValue);
+                                break;
+                            }
+                        }
+                        if (usedIndices.has(block.index))
+                            break;
+                    }
                 }
             }
+            this.log('matchBlockDiagrams: found', pairs.length, 'pairs');
         }
         matchFactors(factorsLists, numbers, pairs, usedIndices) {
             this.log('using factors matching mode');
@@ -4745,6 +4958,7 @@ var AutoDuo = (function (exports) {
                 return this.failure('expressionBuild', 'Could not find tokens');
             }
             this.log('tokens =', JSON.stringify(tokens), ', numEntries =', numEntries);
+            this.logDebug('full token array:', tokens.map((t, i) => `[${i}]=${JSON.stringify(t)}`));
             // Find solution
             const solution = this.findExpressionSolution(tokens, numEntries, targetValue);
             if (!solution) {
@@ -4764,17 +4978,27 @@ var AutoDuo = (function (exports) {
         extractTargetValue(context) {
             const annotations = context.container.querySelectorAll('annotation');
             for (const annotation of annotations) {
-                const text = annotation.textContent ?? '';
+                let text = annotation.textContent ?? '';
                 if (text.includes('\\duoblank')) {
-                    // Format: "12 = \duoblank{3}"
-                    const match = text.match(/(\d+)\s*=\s*\\duoblank/);
+                    // Clean LaTeX wrappers (e.g., \mathbf{-7=\duoblank{3}} -> -7=\duoblank{3})
+                    text = cleanLatexWrappers(text);
+                    this.logDebug('Raw annotation text:', annotation.textContent);
+                    this.logDebug('Cleaned annotation text:', text);
+                    // Format: "-7 = \duoblank{3}" or "12 = \duoblank{3}"
+                    // Match optional negative sign, digits, optional decimal part, whitespace, equals, whitespace, backslash duoblank
+                    const match = text.match(/^(-?\d+(?:\.\d+)?)\s*=\s*\\duoblank/);
                     if (match?.[1]) {
-                        return parseInt(match[1], 10);
+                        const target = parseFloat(match[1]);
+                        this.logDebug('Extracted target from left side:', target);
+                        return target;
                     }
-                    // Format: "\duoblank{3} = 12"
-                    const matchReverse = text.match(/\\duoblank\{\d+\}\s*=\s*(\d+)/);
+                    // Format: "\duoblank{3} = -7" or "\duoblank{3} = 12"
+                    // Match backslash duoblank, optional number in braces, whitespace, equals, whitespace, optional negative sign, digits, optional decimal part
+                    const matchReverse = text.match(/\\duoblank\{\d+\}\s*=\s*(-?\d+(?:\.\d+)?)/);
                     if (matchReverse?.[1]) {
-                        return parseInt(matchReverse[1], 10);
+                        const target = parseFloat(matchReverse[1]);
+                        this.logDebug('Extracted target from right side:', target);
+                        return target;
                     }
                 }
             }
@@ -4919,22 +5143,31 @@ var AutoDuo = (function (exports) {
                 const trimmed = part.trim();
                 if (!trimmed)
                     continue;
-                // Pattern 1: renderNumber(X) -> X
-                const numMatch = trimmed.match(/renderNumber\((\d+)\)/);
+                // Pattern 1: renderNumber(X) -> X (supports negative numbers and decimals)
+                const numMatch = trimmed.match(/renderNumber\((-?\d+(?:\.\d+)?)\)/);
                 if (numMatch?.[1]) {
-                    tokens.push(parseInt(numMatch[1], 10));
+                    tokens.push(parseFloat(numMatch[1]));
                     continue;
                 }
-                // Pattern 2: Just a number
-                const plainNumMatch = trimmed.match(/^(\d+)$/);
+                // Pattern 2: Just a number (supports negative numbers and decimals)
+                const plainNumMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)$/);
                 if (plainNumMatch?.[1]) {
-                    tokens.push(parseInt(plainNumMatch[1], 10));
+                    tokens.push(parseFloat(plainNumMatch[1]));
                     continue;
                 }
-                // Pattern 3: String token like "+" or "-"
+                // Pattern 3: Quoted string - check if it's a number or operator
                 const strMatch = trimmed.match(/"([^"]+)"|'([^']+)'/);
                 if (strMatch) {
-                    tokens.push(strMatch[1] ?? strMatch[2] ?? '');
+                    const strValue = strMatch[1] ?? strMatch[2] ?? '';
+                    // Check if it's a number (including decimals)
+                    const quotedNumMatch = strValue.match(/^(-?\d+(?:\.\d+)?)$/);
+                    if (quotedNumMatch?.[1]) {
+                        tokens.push(parseFloat(quotedNumMatch[1]));
+                    }
+                    else {
+                        // It's an operator or other string token
+                        tokens.push(strValue);
+                    }
                     continue;
                 }
                 // Pattern 4: String without quotes (like + or -)
@@ -4960,10 +5193,11 @@ var AutoDuo = (function (exports) {
                     operators.push({ value: token, index: i });
                 }
             }
+            this.logDebug('separated tokens - numbers:', numbers.map(n => `[${n.index}]=${n.value}`), 'operators:', operators.map(o => `[${o.index}]=${o.value}`));
             // For numEntries = 1
             if (numEntries === 1) {
                 for (const num of numbers) {
-                    if (num.value === target) {
+                    if (this.isEqualWithTolerance(num.value, target)) {
                         return [num.index];
                     }
                 }
@@ -4980,19 +5214,22 @@ var AutoDuo = (function (exports) {
             return null;
         }
         findThreeTokenSolution(numbers, operators, target) {
+            this.logDebug('findThreeTokenSolution: numbers:', numbers.map(n => `${n.value}[${n.index}]`), 'operators:', operators.map(o => `${o.value}[${o.index}]`), 'target:', target);
+            // Standard pattern: num1 op num2 (3 tokens total)
             for (const num1 of numbers) {
                 for (const op of operators) {
                     for (const num2 of numbers) {
                         if (num1.index === num2.index)
                             continue;
                         const result = this.evaluateOp(num1.value, op.value, num2.value);
-                        if (result === target) {
-                            this.log('found:', num1.value, op.value, num2.value, '=', target);
+                        if (result !== null && this.isEqualWithTolerance(result, target)) {
+                            this.log('found solution:', num1.value, op.value, num2.value, '=', target, '(indices:', [num1.index, op.index, num2.index], ')');
                             return [num1.index, op.index, num2.index];
                         }
                     }
                 }
             }
+            this.logDebug('no solution found for 3-token pattern');
             return null;
         }
         findFiveTokenSolution(numbers, operators, target) {
@@ -5010,7 +5247,7 @@ var AutoDuo = (function (exports) {
                                     continue;
                                 const expr = `${num1.value}${op1.value}${num2.value}${op2.value}${num3.value}`;
                                 const result = evaluateMathExpression(expr);
-                                if (result === target) {
+                                if (result !== null && this.isEqualWithTolerance(result, target)) {
                                     this.log('found:', expr, '=', target);
                                     return [
                                         num1.index,
@@ -5042,6 +5279,9 @@ var AutoDuo = (function (exports) {
                 default:
                     return null;
             }
+        }
+        isEqualWithTolerance(a, b, tolerance = 0.0001) {
+            return Math.abs(a - b) < tolerance;
         }
         setSolution(iframe, solution) {
             try {
@@ -5412,6 +5652,17 @@ var AutoDuo = (function (exports) {
                 this.logDebug('choice', i, '- value:', choiceValue);
                 if (choiceValue === null)
                     continue;
+                // Extract number from choice value
+                // Handles formats like: "9", "X=9", "X = 9", "9.5", "-5", etc.
+                const numberMatch = choiceValue.match(/(-?\d+\.?\d*)/);
+                if (numberMatch && numberMatch[1]) {
+                    const choiceNum = parseFloat(numberMatch[1]);
+                    if (!isNaN(choiceNum) && choiceNum === answer) {
+                        this.log('found matching choice at index', i);
+                        return i;
+                    }
+                }
+                // Fallback: try parsing the whole string as a number
                 const choiceNum = parseFloat(choiceValue);
                 if (!isNaN(choiceNum) && choiceNum === answer) {
                     this.log('found matching choice at index', i);
@@ -5558,10 +5809,29 @@ var AutoDuo = (function (exports) {
             if (!context.choices?.length || context.choices.length < 2) {
                 return false;
             }
-            // Check for "Show this another way" or similar headers
-            const headerMatches = this.headerContains(context, 'show', 'another', 'way');
-            if (!headerMatches) {
-                return false;
+            // Check if choices contain block diagrams (new variant: equation + block diagram choices)
+            const hasBlockDiagramChoices = context.choices.some(choice => {
+                const iframe = choice?.querySelector('iframe[title="Math Web Element"]');
+                if (!iframe)
+                    return false;
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    return false;
+                return isBlockDiagram(srcdoc);
+            });
+            // If choices are block diagrams, allow even without "Show this another way" header
+            // (for equations with \duoblank and block diagram choices)
+            if (hasBlockDiagramChoices) {
+                // Check if equation has \duoblank (this is a valid case)
+                if (context.equationContainer) {
+                    const annotation = context.equationContainer.querySelector('annotation');
+                    if (annotation?.textContent) {
+                        const text = annotation.textContent;
+                        if (text.includes('\\duoblank') && text.includes('=')) {
+                            return true;
+                        }
+                    }
+                }
             }
             // Exclude if there's a NumberLine slider (those use InteractiveSliderSolver)
             const allIframes = findAllIframes(context.container);
@@ -5574,18 +5844,14 @@ var AutoDuo = (function (exports) {
                     }
                 }
             }
-            // Check if choices contain block diagrams (new variant: equation + block diagram choices)
-            const hasBlockDiagramChoices = context.choices.some(choice => {
-                const iframe = choice?.querySelector('iframe[title="Math Web Element"]');
-                if (!iframe)
-                    return false;
-                const srcdoc = iframe.getAttribute('srcdoc');
-                if (!srcdoc)
-                    return false;
-                return isBlockDiagram(srcdoc);
-            });
+            // If choices are block diagrams, allow (either with header or with \duoblank equation)
             if (hasBlockDiagramChoices) {
                 return true;
+            }
+            // Check for "Show this another way" or similar headers
+            const headerMatches = this.headerContains(context, 'show', 'another', 'way');
+            if (!headerMatches) {
+                return false;
             }
             // Fallback: check if main container has block diagram (old variant: block diagram + number choices)
             const iframe = context.container.querySelector('iframe[title="Math Web Element"]');
@@ -5618,8 +5884,20 @@ var AutoDuo = (function (exports) {
             let blockValue = null;
             if (hasBlockDiagramChoices) {
                 // Variant 1: Equation shows number, choices show block diagrams
-                // Extract target value from equation (KaTeX in main container)
+                // Check if equation has \duoblank (needs to be solved)
                 if (context.equationContainer) {
+                    const annotation = context.equationContainer.querySelector('annotation');
+                    if (annotation?.textContent) {
+                        const equationText = annotation.textContent;
+                        if (equationText.includes('\\duoblank') && equationText.includes('=')) {
+                            // Solve equation with blank
+                            targetValue = solveEquationWithBlank(equationText);
+                            this.log('solved equation with blank, target value:', targetValue);
+                        }
+                    }
+                }
+                // Extract target value from equation (KaTeX in main container) if not solved yet
+                if (targetValue === null && context.equationContainer) {
                     const valueStr = extractKatexValue(context.equationContainer);
                     if (valueStr) {
                         targetValue = evaluateMathExpression(valueStr);
@@ -5684,6 +5962,7 @@ var AutoDuo = (function (exports) {
                         continue;
                     }
                     this.log('choice', i, 'block diagram value:', diagramValue, 'target:', targetValue);
+                    // Direct match
                     if (Math.abs(diagramValue - targetValue) < 0.0001) {
                         matchedIndex = i;
                         matchedBlockValue = diagramValue;
@@ -5691,9 +5970,54 @@ var AutoDuo = (function (exports) {
                         this.log('found matching choice', i, ':', targetValue, '=', diagramValue);
                         break;
                     }
-                    else {
-                        this.log('choice', i, 'does not match:', diagramValue, '!=', targetValue);
+                    // Check if targetValue is a decimal (0-1) and diagramValue is an integer
+                    // This handles cases like 0.85 (85%) matching 85 blocks
+                    if (targetValue > 0 && targetValue < 1 && Number.isInteger(diagramValue)) {
+                        const targetAsPercent = targetValue * 100;
+                        if (Math.abs(diagramValue - targetAsPercent) < 0.0001) {
+                            matchedIndex = i;
+                            matchedBlockValue = diagramValue;
+                            blockValue = diagramValue;
+                            this.log('found matching choice (percentage)', i, ':', targetValue, '* 100 =', targetAsPercent, '=', diagramValue);
+                            break;
+                        }
                     }
+                    // Check reverse: if targetValue is an integer and diagramValue is decimal (0-1)
+                    if (Number.isInteger(targetValue) && diagramValue > 0 && diagramValue < 1) {
+                        const diagramAsPercent = diagramValue * 100;
+                        if (Math.abs(targetValue - diagramAsPercent) < 0.0001) {
+                            matchedIndex = i;
+                            matchedBlockValue = diagramValue;
+                            blockValue = diagramValue;
+                            this.log('found matching choice (reverse percentage)', i, ':', targetValue, '=', diagramValue, '* 100 =', diagramAsPercent);
+                            break;
+                        }
+                    }
+                    // Check if targetValue is a decimal >= 1 and diagramValue is an integer
+                    // This handles cases like 1.2 matching 120 blocks (1.2 * 100 = 120)
+                    if (targetValue >= 1 && !Number.isInteger(targetValue) && Number.isInteger(diagramValue)) {
+                        const targetAsPercent = targetValue * 100;
+                        if (Math.abs(diagramValue - targetAsPercent) < 0.0001) {
+                            matchedIndex = i;
+                            matchedBlockValue = diagramValue;
+                            blockValue = diagramValue;
+                            this.log('found matching choice (decimal to percent)', i, ':', targetValue, '* 100 =', targetAsPercent, '=', diagramValue);
+                            break;
+                        }
+                    }
+                    // Check reverse: if targetValue is an integer and diagramValue is decimal >= 1
+                    // This handles cases like 120 matching 1.2 blocks (120 / 100 = 1.2)
+                    if (Number.isInteger(targetValue) && diagramValue >= 1 && !Number.isInteger(diagramValue)) {
+                        const targetAsDecimal = targetValue / 100;
+                        if (Math.abs(diagramValue - targetAsDecimal) < 0.0001) {
+                            matchedIndex = i;
+                            matchedBlockValue = diagramValue;
+                            blockValue = diagramValue;
+                            this.log('found matching choice (percent to decimal)', i, ':', targetValue, '/ 100 =', targetAsDecimal, '=', diagramValue);
+                            break;
+                        }
+                    }
+                    this.log('choice', i, 'does not match:', diagramValue, '!=', targetValue);
                 }
                 if (matchedIndex === -1) {
                     return this.failure('blockDiagramChoice', `no choice matches target value ${targetValue}`);

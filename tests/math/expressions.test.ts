@@ -42,6 +42,14 @@ describe('expressions', () => {
             expect(evaluateMathExpression('5−2')).toBe(3);
         });
 
+        it('should handle \\neg operator', () => {
+            expect(evaluateMathExpression('\\neg(-0.55)')).toBeCloseTo(0.55, 5);
+            expect(evaluateMathExpression('\\neg(-2.6)')).toBeCloseTo(2.6, 5);
+            expect(evaluateMathExpression('\\neg(-2.45)')).toBeCloseTo(2.45, 5);
+            expect(evaluateMathExpression('\\neg(5)')).toBe(-5);
+            expect(evaluateMathExpression('\\neg 29')).toBe(-29);
+        });
+
         it('should return null for empty input', () => {
             expect(evaluateMathExpression('')).toBeNull();
             expect(evaluateMathExpression(null)).toBeNull();
