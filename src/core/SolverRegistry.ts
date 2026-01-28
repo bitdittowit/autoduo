@@ -11,6 +11,7 @@ import { TypeAnswerSolver } from '../solvers/TypeAnswerSolver';
 import { SelectEquivalentFractionSolver } from '../solvers/SelectEquivalentFractionSolver';
 import { ComparisonChoiceSolver } from '../solvers/ComparisonChoiceSolver';
 import { SelectFactorsSolver } from '../solvers/SelectFactorsSolver';
+import { LeastCommonMultipleSolver } from '../solvers/LeastCommonMultipleSolver';
 import { SelectOperatorSolver } from '../solvers/SelectOperatorSolver';
 import { SelectPieChartSolver } from '../solvers/SelectPieChartSolver';
 import { PieChartTextInputSolver } from '../solvers/PieChartTextInputSolver';
@@ -94,6 +95,7 @@ export class SolverRegistry {
         this.register(new BlockDiagramTextInputSolver());
         this.register(new RoundToNearestSolver());
         this.register(new SelectFactorsSolver()); // Select factors from list
+        this.register(new LeastCommonMultipleSolver()); // Select least common multiple
         this.register(new SelectEquivalentFractionSolver());
         this.register(new ComparisonChoiceSolver());
         this.register(new SelectOperatorSolver());
