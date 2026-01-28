@@ -128,6 +128,19 @@ src/
 
 ## Последние изменения
 
+### v1.0.12 (2026-01-29)
+- **Исправлено:** ExpressionBuildSolver ТАКЖЕ пропускал ExpressionBuild
+  - Задание "Complete the equation" (`4=?`) с токенами `[80,5,"/",65,"/",35,20]`
+  - **Логи:** `skipping NumberLine iframe (not ExpressionBuild)`
+  - Результат: `no solver found for challenge`
+  - **Причина:** ExpressionBuildSolver проверял NumberLine РАНЬШЕ ExpressionBuild
+  - Проверка `srcdoc.includes('NumberLine')` срабатывала на библиотечный код
+  - **Решение:** 
+    * СНАЧАЛА проверка на `new ExpressionBuild` + `entries:`
+    * Эта комбинация ОДНОЗНАЧНО указывает на ExpressionBuild компонент
+    * ПОТОМ проверка NumberLine (если ExpressionBuild не найден)
+  - Теперь оба солвера корректно различают типы заданий
+
 ### v1.0.11 (2026-01-29)
 - **Исправлено:** InteractiveSliderSolver ошибочно определял ExpressionBuild как slider
   - Задание "Complete the equation" (`110=?`) с токенами
