@@ -995,6 +995,12 @@ var AutoDuo = (function (exports) {
      */
     function convertLatexOperators(str) {
         return str
+            .replace(/\\left\(/g, '(') // \left( -> (
+            .replace(/\\right\)/g, ')') // \right) -> )
+            .replace(/\\left\[/g, '[') // \left[ -> [
+            .replace(/\\right\]/g, ']') // \right] -> ]
+            .replace(/\\left\{/g, '{') // \left\{ -> {
+            .replace(/\\right\}/g, '}') // \right\} -> }
             .replace(/\\cdot/g, '*') // \cdot -> *
             .replace(/\\times/g, '*') // \times -> *
             .replace(/\\div/g, '/') // \div -> /
@@ -1435,11 +1441,33 @@ var AutoDuo = (function (exports) {
             .replace(/\s+/g, ''); // Remove whitespace
         // Convert LaTeX operators
         cleaned = convertLatexOperators(cleaned);
-        // Remove any remaining non-math characters
-        cleaned = cleaned.replace(/[^\d+\-*/().]/g, '');
+        // Handle exponentiation notation BEFORE removing braces
+        // Convert {base}^{exponent} to base**exponent
+        cleaned = cleaned.replace(/\{([^}]+)\}\^\{([^}]+)\}/g, (_match, base, exp) => {
+            const cleanBase = base.replace(/[^\d.]/g, '');
+            const cleanExp = exp.replace(/[^\d.]/g, '');
+            return `(${cleanBase})**(${cleanExp})`;
+        });
+        // Handle base^{exponent} format (without braces around base)
+        cleaned = cleaned.replace(/(\d+)\^\{([^}]+)\}/g, (_match, base, exp) => {
+            const cleanExp = exp.replace(/[^\d.]/g, '');
+            return `(${base})**(${cleanExp})`;
+        });
+        // Handle {base}^exponent format (without braces around exponent)
+        cleaned = cleaned.replace(/\{([^}]+)\}\^(\d+)/g, (_match, base, exp) => {
+            const cleanBase = base.replace(/[^\d.]/g, '');
+            return `(${cleanBase})**(${exp})`;
+        });
+        // Handle simple base^exponent format
+        cleaned = cleaned.replace(/(\d+)\^(\d+)/g, '($1)**($2)');
+        // Remove remaining braces (they might be from LaTeX formatting that wasn't exponentiation)
+        cleaned = cleaned.replace(/\{/g, '').replace(/\}/g, '');
+        // Remove any remaining non-math characters (but keep ** for exponentiation)
+        cleaned = cleaned.replace(/[^\d+\-*/.()]/g, '');
         logger.debug('evaluateMathExpression: cleaned', cleaned);
-        // Validate - only allow safe characters
-        if (!/^[\d+\-*/().]+$/.test(cleaned)) {
+        // Validate - allow digits, operators, parentheses, and ** for exponentiation
+        const cleanedForValidation = cleaned.replace(/\*\*/g, '');
+        if (!/^[\d+\-*/().]+$/.test(cleanedForValidation)) {
             logger.warn('evaluateMathExpression: invalid expression after cleaning', cleaned);
             return null;
         }
@@ -1449,6 +1477,7 @@ var AutoDuo = (function (exports) {
         }
         try {
             // Using Function constructor for safer eval
+            // ** is supported in modern JavaScript for exponentiation
             const result = new Function('return ' + cleaned)();
             if (typeof result !== 'number' || !Number.isFinite(result)) {
                 logger.warn('evaluateMathExpression: result is not a valid number', result);
@@ -1464,10 +1493,13 @@ var AutoDuo = (function (exports) {
     }
     /**
      * Проверяет, является ли строка валидным математическим выражением
+     * Supports exponentiation (**)
      */
     function isValidMathExpression(expr) {
         const cleaned = expr.replace(/\s+/g, '');
-        return /^[\d+\-*/().]+$/.test(cleaned) && cleaned.length > 0;
+        // Allow ** for exponentiation
+        const cleanedForValidation = cleaned.replace(/\*\*/g, '');
+        return /^[\d+\-*/().]+$/.test(cleanedForValidation) && cleaned.length > 0;
     }
 
     /**
@@ -1589,7 +1621,13 @@ var AutoDuo = (function (exports) {
         // Clean the equation
         let cleaned = equation
             .replace(/\\duoblank\{[^}]*\}/g, 'X')
-            .replace(/\s+/g, '');
+            .replace(/\s+/g, '')
+            .replace(/\\left\(/g, '(')
+            .replace(/\\right\)/g, ')')
+            .replace(/\\left\[/g, '[')
+            .replace(/\\right\]/g, ']')
+            .replace(/\\left\{/g, '{')
+            .replace(/\\right\}/g, '}');
         cleaned = cleanLatexWrappers(cleaned);
         cleaned = cleanLatexForEval(cleaned);
         logger.debug('solveEquationWithBlank: cleaned', cleaned);
@@ -1648,28 +1686,33 @@ var AutoDuo = (function (exports) {
     }
     /**
      * Пытается решить алгебраически для простых паттернов
+     * Supports both integers and floating-point numbers
      */
     function solveAlgebraically(exprWithX, target) {
         const patterns = [
             { pattern: /^X$/, solve: () => target },
-            { pattern: /^X\+(\d+)$/, solve: (n) => target - n },
-            { pattern: /^X-(\d+)$/, solve: (n) => target + n },
-            { pattern: /^(\d+)\+X$/, solve: (n) => target - n },
-            { pattern: /^(\d+)-X$/, solve: (n) => n - target },
-            { pattern: /^X\*(\d+)$/, solve: (n) => target / n },
-            { pattern: /^(\d+)\*X$/, solve: (n) => target / n },
-            { pattern: /^X\/(\d+)$/, solve: (n) => target * n },
-            { pattern: /^(\d+)\/X$/, solve: (n) => n / target },
+            { pattern: /^X\+([0-9.]+)$/, solve: (n) => target - n },
+            { pattern: /^X-([0-9.]+)$/, solve: (n) => target + n },
+            { pattern: /^([0-9.]+)\+X$/, solve: (n) => target - n },
+            { pattern: /^([0-9.]+)-X$/, solve: (n) => n - target },
+            { pattern: /^X\*([0-9.]+)$/, solve: (n) => target / n },
+            { pattern: /^([0-9.]+)\*X$/, solve: (n) => target / n },
+            { pattern: /^X\/([0-9.]+)$/, solve: (n) => target * n },
+            { pattern: /^([0-9.]+)\/X$/, solve: (n) => n / target },
             // Patterns with parentheses
-            { pattern: /^\(X\)\+(\d+)$/, solve: (n) => target - n },
-            { pattern: /^\(X\)-(\d+)$/, solve: (n) => target + n },
-            { pattern: /^\(X\)\*(\d+)$/, solve: (n) => target / n },
-            { pattern: /^\(X\)\/(\d+)$/, solve: (n) => target * n },
+            { pattern: /^\(X\)\+([0-9.]+)$/, solve: (n) => target - n },
+            { pattern: /^\(X\)-([0-9.]+)$/, solve: (n) => target + n },
+            { pattern: /^\(X\)\*([0-9.]+)$/, solve: (n) => target / n },
+            { pattern: /^\(X\)\/([0-9.]+)$/, solve: (n) => target * n },
+            { pattern: /^([0-9.]+)\*\(X\)$/, solve: (n) => target / n },
+            { pattern: /^([0-9.]+)\/\(X\)$/, solve: (n) => n / target },
         ];
         for (const { pattern, solve } of patterns) {
             const match = exprWithX.match(pattern);
             if (match) {
-                const n = match[1] ? parseInt(match[1], 10) : 0;
+                const n = match[1] ? parseFloat(match[1]) : 0;
+                if (Number.isNaN(n))
+                    continue;
                 const result = solve(n);
                 if (Number.isFinite(result)) {
                     logger.debug('solveForX: algebraic solution X =', result);

@@ -59,6 +59,12 @@ export function cleanLatexWrappers(str: string): string {
  */
 export function convertLatexOperators(str: string): string {
     return str
+        .replace(/\\left\(/g, '(')    // \left( -> (
+        .replace(/\\right\)/g, ')')   // \right) -> )
+        .replace(/\\left\[/g, '[')    // \left[ -> [
+        .replace(/\\right\]/g, ']')   // \right] -> ]
+        .replace(/\\left\{/g, '{')    // \left\{ -> {
+        .replace(/\\right\}/g, '}')   // \right\} -> }
         .replace(/\\cdot/g, '*')      // \cdot -> *
         .replace(/\\times/g, '*')     // \times -> *
         .replace(/\\div/g, '/')       // \div -> /

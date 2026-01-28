@@ -22,7 +22,13 @@ export function solveEquationWithBlank(equation: string): number | null {
     // Clean the equation
     let cleaned = equation
         .replace(/\\duoblank\{[^}]*\}/g, 'X')
-        .replace(/\s+/g, '');
+        .replace(/\s+/g, '')
+        .replace(/\\left\(/g, '(')
+        .replace(/\\right\)/g, ')')
+        .replace(/\\left\[/g, '[')
+        .replace(/\\right\]/g, ']')
+        .replace(/\\left\{/g, '{')
+        .replace(/\\right\}/g, '}');
 
     cleaned = cleanLatexWrappers(cleaned);
     cleaned = cleanLatexForEval(cleaned);
@@ -92,29 +98,34 @@ export function solveForX(exprWithX: string, otherSide: string): number | null {
 
 /**
  * Пытается решить алгебраически для простых паттернов
+ * Supports both integers and floating-point numbers
  */
 function solveAlgebraically(exprWithX: string, target: number): number | null {
     const patterns: { pattern: RegExp; solve: (n: number) => number }[] = [
         { pattern: /^X$/, solve: (): number => target },
-        { pattern: /^X\+(\d+)$/, solve: (n): number => target - n },
-        { pattern: /^X-(\d+)$/, solve: (n): number => target + n },
-        { pattern: /^(\d+)\+X$/, solve: (n): number => target - n },
-        { pattern: /^(\d+)-X$/, solve: (n): number => n - target },
-        { pattern: /^X\*(\d+)$/, solve: (n): number => target / n },
-        { pattern: /^(\d+)\*X$/, solve: (n): number => target / n },
-        { pattern: /^X\/(\d+)$/, solve: (n): number => target * n },
-        { pattern: /^(\d+)\/X$/, solve: (n): number => n / target },
+        { pattern: /^X\+([0-9.]+)$/, solve: (n): number => target - n },
+        { pattern: /^X-([0-9.]+)$/, solve: (n): number => target + n },
+        { pattern: /^([0-9.]+)\+X$/, solve: (n): number => target - n },
+        { pattern: /^([0-9.]+)-X$/, solve: (n): number => n - target },
+        { pattern: /^X\*([0-9.]+)$/, solve: (n): number => target / n },
+        { pattern: /^([0-9.]+)\*X$/, solve: (n): number => target / n },
+        { pattern: /^X\/([0-9.]+)$/, solve: (n): number => target * n },
+        { pattern: /^([0-9.]+)\/X$/, solve: (n): number => n / target },
         // Patterns with parentheses
-        { pattern: /^\(X\)\+(\d+)$/, solve: (n): number => target - n },
-        { pattern: /^\(X\)-(\d+)$/, solve: (n): number => target + n },
-        { pattern: /^\(X\)\*(\d+)$/, solve: (n): number => target / n },
-        { pattern: /^\(X\)\/(\d+)$/, solve: (n): number => target * n },
+        { pattern: /^\(X\)\+([0-9.]+)$/, solve: (n): number => target - n },
+        { pattern: /^\(X\)-([0-9.]+)$/, solve: (n): number => target + n },
+        { pattern: /^\(X\)\*([0-9.]+)$/, solve: (n): number => target / n },
+        { pattern: /^\(X\)\/([0-9.]+)$/, solve: (n): number => target * n },
+        { pattern: /^([0-9.]+)\*\(X\)$/, solve: (n): number => target / n },
+        { pattern: /^([0-9.]+)\/\(X\)$/, solve: (n): number => n / target },
     ];
 
     for (const { pattern, solve } of patterns) {
         const match = exprWithX.match(pattern);
         if (match) {
-            const n = match[1] ? parseInt(match[1], 10) : 0;
+            const n = match[1] ? parseFloat(match[1]) : 0;
+            if (Number.isNaN(n)) continue;
+
             const result = solve(n);
             if (Number.isFinite(result)) {
                 logger.debug('solveForX: algebraic solution X =', result);

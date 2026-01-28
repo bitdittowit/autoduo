@@ -32,13 +32,40 @@ export function evaluateMathExpression(expr: string | null | undefined): number 
     // Convert LaTeX operators
     cleaned = convertLatexOperators(cleaned);
 
-    // Remove any remaining non-math characters
-    cleaned = cleaned.replace(/[^\d+\-*/().]/g, '');
+    // Handle exponentiation notation BEFORE removing braces
+    // Convert {base}^{exponent} to base**exponent
+    cleaned = cleaned.replace(/\{([^}]+)\}\^\{([^}]+)\}/g, (_match, base, exp) => {
+        const cleanBase = base.replace(/[^\d.]/g, '');
+        const cleanExp = exp.replace(/[^\d.]/g, '');
+        return `(${cleanBase})**(${cleanExp})`;
+    });
+
+    // Handle base^{exponent} format (without braces around base)
+    cleaned = cleaned.replace(/(\d+)\^\{([^}]+)\}/g, (_match, base, exp) => {
+        const cleanExp = exp.replace(/[^\d.]/g, '');
+        return `(${base})**(${cleanExp})`;
+    });
+
+    // Handle {base}^exponent format (without braces around exponent)
+    cleaned = cleaned.replace(/\{([^}]+)\}\^(\d+)/g, (_match, base, exp) => {
+        const cleanBase = base.replace(/[^\d.]/g, '');
+        return `(${cleanBase})**(${exp})`;
+    });
+
+    // Handle simple base^exponent format
+    cleaned = cleaned.replace(/(\d+)\^(\d+)/g, '($1)**($2)');
+
+    // Remove remaining braces (they might be from LaTeX formatting that wasn't exponentiation)
+    cleaned = cleaned.replace(/\{/g, '').replace(/\}/g, '');
+
+    // Remove any remaining non-math characters (but keep ** for exponentiation)
+    cleaned = cleaned.replace(/[^\d+\-*/.()]/g, '');
 
     logger.debug('evaluateMathExpression: cleaned', cleaned);
 
-    // Validate - only allow safe characters
-    if (!/^[\d+\-*/().]+$/.test(cleaned)) {
+    // Validate - allow digits, operators, parentheses, and ** for exponentiation
+    const cleanedForValidation = cleaned.replace(/\*\*/g, '');
+    if (!/^[\d+\-*/().]+$/.test(cleanedForValidation)) {
         logger.warn('evaluateMathExpression: invalid expression after cleaning', cleaned);
         return null;
     }
@@ -50,7 +77,7 @@ export function evaluateMathExpression(expr: string | null | undefined): number 
 
     try {
         // Using Function constructor for safer eval
-
+        // ** is supported in modern JavaScript for exponentiation
         const result = new Function('return ' + cleaned)() as unknown;
 
         if (typeof result !== 'number' || !Number.isFinite(result)) {
@@ -68,8 +95,11 @@ export function evaluateMathExpression(expr: string | null | undefined): number 
 
 /**
  * Проверяет, является ли строка валидным математическим выражением
+ * Supports exponentiation (**)
  */
 export function isValidMathExpression(expr: string): boolean {
     const cleaned = expr.replace(/\s+/g, '');
-    return /^[\d+\-*/().]+$/.test(cleaned) && cleaned.length > 0;
+    // Allow ** for exponentiation
+    const cleanedForValidation = cleaned.replace(/\*\*/g, '');
+    return /^[\d+\-*/().]+$/.test(cleanedForValidation) && cleaned.length > 0;
 }
