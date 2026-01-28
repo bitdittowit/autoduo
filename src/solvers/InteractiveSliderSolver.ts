@@ -78,7 +78,11 @@ export class InteractiveSliderSolver extends BaseSolver {
 
             // CRITICAL: Skip Factor Tree challenges
             // Factor Tree may have NumberLine in iframe, but it's not a slider challenge
-            if (srcdoc.includes('FactorTree') || srcdoc.includes('originalTree')) {
+            // Check for BOTH FactorTree class AND originalTokens (unique to Factor Tree)
+            if (
+                (srcdoc.includes('FactorTree') || srcdoc.includes('new FactorTree')) &&
+                srcdoc.includes('originalTokens')
+            ) {
                 this.log('skipping Factor Tree iframe (not a slider challenge)');
                 continue;
             }
