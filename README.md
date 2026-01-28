@@ -128,6 +128,14 @@ src/
 
 ## Последние изменения
 
+### v1.0.9 (2026-01-29)
+- **Исправлено:** Factor Tree задания не распознавались ("Divide to fill in the blank")
+  - InteractiveSliderSolver ошибочно срабатывал на Factor Tree iframe
+  - Factor Tree содержит NumberLine в коде, но это дерево факторизации, не slider
+  - Добавлена проверка: пропускаем iframe с `FactorTree` или `originalTree`
+  - Теперь FactorTreeSolver корректно обрабатывает задания
+  - Пример: `90 = ? × 3` с токенами `[125, 30, 5]`
+
 ### v1.0.8 (2026-01-29)
 - **Исправлено:** Непрерывные sliders не распознавались ("Get as close as you can")
   - InteractiveSliderSolver пропускал NumberLine iframe с упоминанием "ExpressionBuild"
