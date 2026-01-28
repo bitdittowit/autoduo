@@ -41,7 +41,19 @@ export class ExpressionBuildSolver extends BaseSolver {
         for (const iframe of allIframes) {
             const srcdoc = iframe.getAttribute('srcdoc');
             if (srcdoc?.includes('exprBuild') || srcdoc?.includes('ExpressionBuild')) {
-                // IMPORTANT: Exclude NumberLine iframes even if they contain "ExpressionBuild" text
+                // CRITICAL: Check if this is a REAL ExpressionBuild component
+                // Real ExpressionBuild has: "new ExpressionBuild" AND "entries:"
+                const hasExpressionBuildComponent =
+                    srcdoc.includes('new ExpressionBuild') &&
+                    (srcdoc.includes('entries:') || srcdoc.includes('entries ='));
+
+                if (hasExpressionBuildComponent) {
+                    // This is a real ExpressionBuild, regardless of NumberLine code in library
+                    expressionBuildIframe = iframe;
+                    break;
+                }
+
+                // IMPORTANT: Exclude NumberLine sliders
                 // NumberLine sliders have fillToValue, StandaloneSlider, or slider configuration
                 if (
                     srcdoc.includes('NumberLine') &&
@@ -50,6 +62,8 @@ export class ExpressionBuildSolver extends BaseSolver {
                     this.log('skipping NumberLine iframe (not ExpressionBuild)');
                     continue;
                 }
+
+                // Fallback: if it has exprBuild/ExpressionBuild text but no clear indicator
                 expressionBuildIframe = iframe;
                 break;
             }
