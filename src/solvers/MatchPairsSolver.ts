@@ -346,6 +346,8 @@ export class MatchPairsSolver extends BaseSolver {
         return (
             value.includes('+') ||
             value.includes('*') ||
+            value.includes('/') ||       // Division
+            value.includes('÷') ||       // Unicode division
             /\)\s*-/.test(value) ||
             /\d\s*-\s*\(/.test(value)
         );
@@ -565,6 +567,29 @@ export class MatchPairsSolver extends BaseSolver {
     ): void {
         const fallbackTokens = tokens.filter(t => !t.isRoundingTarget);
 
+        // First pass: prefer matching expressions with simple numbers
+        const expressions = fallbackTokens.filter(t => t.isExpression && !usedIndices.has(t.index));
+        const simpleNumbers = fallbackTokens.filter(t => !t.isExpression && !usedIndices.has(t.index));
+
+        for (const expr of expressions) {
+            if (expr.numericValue === null) continue;
+
+            for (const num of simpleNumbers) {
+                if (usedIndices.has(num.index) || num.numericValue === null) {
+                    continue;
+                }
+
+                if (Math.abs(expr.numericValue - num.numericValue) < 0.0001) {
+                    pairs.push({ first: expr, second: num });
+                    usedIndices.add(expr.index);
+                    usedIndices.add(num.index);
+                    this.log('found fallback pair (expr→num):', expr.rawValue, '=', num.rawValue);
+                    break;
+                }
+            }
+        }
+
+        // Second pass: match remaining tokens with same value (fallback for edge cases)
         for (let i = 0; i < fallbackTokens.length; i++) {
             const t1 = fallbackTokens[i];
             if (!t1 || usedIndices.has(t1.index) || t1.numericValue === null) {
@@ -584,7 +609,7 @@ export class MatchPairsSolver extends BaseSolver {
                     pairs.push({ first: t1, second: t2 });
                     usedIndices.add(t1.index);
                     usedIndices.add(t2.index);
-                    this.log('found fallback pair:', t1.rawValue, '=', t2.rawValue);
+                    this.log('found fallback pair (any):', t1.rawValue, '=', t2.rawValue);
                     break;
                 }
             }
