@@ -128,6 +128,15 @@ src/
 
 ## Последние изменения
 
+### v1.0.8 (2026-01-29)
+- **Исправлено:** Непрерывные sliders не распознавались ("Get as close as you can")
+  - InteractiveSliderSolver пропускал NumberLine iframe с упоминанием "ExpressionBuild"
+  - Добавлена проверка признаков настоящего slider:
+    * `disableSnapping: true` - непрерывный slider
+    * `fillToValue: true` - дискретный slider с fill
+    * `density` конфигурация (TWO_PRIMARY, SEVEN_PRIMARY)
+  - Теперь решает оба типа: дискретные (`150÷25=?`) и непрерывные (`?÷30=3`)
+
 ### v1.0.7 (2026-01-29)
 - **Исправлено:** NumberLine slider не распознавался для заданий "Answer on the line"
   - ExpressionBuildSolver ошибочно срабатывал на NumberLine iframe
