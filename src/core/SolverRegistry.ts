@@ -13,6 +13,7 @@ import { ComparisonChoiceSolver } from '../solvers/ComparisonChoiceSolver';
 import { SelectFactorsSolver } from '../solvers/SelectFactorsSolver';
 import { LeastCommonMultipleSolver } from '../solvers/LeastCommonMultipleSolver';
 import { VisualLCMSolver } from '../solvers/VisualLCMSolver';
+import { GreatestCommonFactorSolver } from '../solvers/GreatestCommonFactorSolver';
 import { SelectOperatorSolver } from '../solvers/SelectOperatorSolver';
 import { SelectPieChartSolver } from '../solvers/SelectPieChartSolver';
 import { PieChartTextInputSolver } from '../solvers/PieChartTextInputSolver';
@@ -98,6 +99,7 @@ export class SolverRegistry {
         this.register(new SelectFactorsSolver()); // Select factors from list
         this.register(new VisualLCMSolver()); // Select LCM with visual block diagrams
         this.register(new LeastCommonMultipleSolver()); // Select LCM with text numbers
+        this.register(new GreatestCommonFactorSolver()); // Find greatest common factor (GCF)
         this.register(new SelectEquivalentFractionSolver());
         this.register(new ComparisonChoiceSolver());
         this.register(new SelectOperatorSolver());
