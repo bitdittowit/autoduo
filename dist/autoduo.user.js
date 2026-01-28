@@ -3218,6 +3218,14 @@ var AutoDuo = (function (exports) {
                     this.log('skipping Factor Tree iframe (not a slider challenge)');
                     continue;
                 }
+                // CRITICAL: Skip ExpressionBuild challenges
+                // ExpressionBuild has tokens and entries, NOT a slider
+                // Check for "new ExpressionBuild" AND "entries:" (unique to ExpressionBuild)
+                if (srcdoc.includes('new ExpressionBuild') &&
+                    (srcdoc.includes('entries:') || srcdoc.includes('entries ='))) {
+                    this.log('skipping ExpressionBuild iframe (not a slider challenge)');
+                    continue;
+                }
                 // Check for NumberLine
                 if (srcdoc.includes('NumberLine')) {
                     // Check if this is a real NumberLine slider vs embedded in ExpressionBuild
