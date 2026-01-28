@@ -3210,6 +3210,12 @@ var AutoDuo = (function (exports) {
                     }
                     continue;
                 }
+                // CRITICAL: Skip Factor Tree challenges
+                // Factor Tree may have NumberLine in iframe, but it's not a slider challenge
+                if (srcdoc.includes('FactorTree') || srcdoc.includes('originalTree')) {
+                    this.log('skipping Factor Tree iframe (not a slider challenge)');
+                    continue;
+                }
                 // Check for NumberLine
                 if (srcdoc.includes('NumberLine')) {
                     // Check if this is a real NumberLine slider vs embedded in ExpressionBuild
