@@ -128,6 +128,16 @@ src/
 
 ## Последние изменения
 
+### v1.0.10 (2026-01-29)
+- **Исправлено:** Обычные slider задания блокировались проверкой Factor Tree
+  - Проверка `originalTree` была слишком широкой
+  - Обычные NumberLine slider содержат похожие переменные
+  - Задания "Get as close as you can" (`60÷20=?`) не решались
+  - Теперь проверка требует **ДВА** условия:
+    * `FactorTree` класс **И**
+    * `originalTokens` (уникально для Factor Tree)
+  - Все slider типы теперь работают корректно
+
 ### v1.0.9 (2026-01-29)
 - **Исправлено:** Factor Tree задания не распознавались ("Divide to fill in the blank")
   - InteractiveSliderSolver ошибочно срабатывал на Factor Tree iframe
