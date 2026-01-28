@@ -128,6 +128,13 @@ src/
 
 ## Последние изменения
 
+### v1.0.7 (2026-01-29)
+- **Исправлено:** NumberLine slider не распознавался для заданий "Answer on the line"
+  - ExpressionBuildSolver ошибочно срабатывал на NumberLine iframe
+  - Изменён порядок регистрации: InteractiveSliderSolver → ExpressionBuildSolver
+  - Добавлена проверка исключения NumberLine iframe в ExpressionBuildSolver
+  - Теперь правильно решает задания: `150÷25 = ?` с интерактивным слайдером
+
 ### v1.0.6 (2026-01-29)
 - **Исправлено:** MatchPairsSolver неправильно решал задания с делением
   - `isCompoundExpression` теперь распознаёт `/` и `÷` как составные выражения
