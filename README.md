@@ -128,6 +128,16 @@ src/
 
 ## Последние изменения
 
+### v1.0.11 (2026-01-29)
+- **Исправлено:** InteractiveSliderSolver ошибочно определял ExpressionBuild как slider
+  - Задание "Complete the equation" (`110=?`) с токенами
+  - Правильный ответ: составить выражение `10⋅11`
+  - Скрипт устанавливал `value=110` (как slider) вместо составления
+  - Результат: неправильный ответ
+  - **Причина:** ExpressionBuild iframe содержит NumberLine код библиотеки
+  - **Решение:** Добавлена проверка на `new ExpressionBuild` + `entries:`
+  - Теперь ExpressionBuild передается ExpressionBuildSolver
+
 ### v1.0.10 (2026-01-29)
 - **Исправлено:** Обычные slider задания блокировались проверкой Factor Tree
   - Проверка `originalTree` была слишком широкой
