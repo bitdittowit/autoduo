@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AutoDuo
 // @namespace    https://github.com/bitdittowit/autoduo
-// @version      1.0.0
+// @version      1.0.16
 // @description  Auto-solve Duolingo Math challenges
 // @author       bitdittowit
 // @match        https://www.duolingo.com/*

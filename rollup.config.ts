@@ -2,7 +2,7 @@ import { defineConfig } from 'rollup';
 import typescript from '@rollup/plugin-typescript';
 import resolve from '@rollup/plugin-node-resolve';
 
-const pkg = { version: '1.0.0' };
+const pkg = { version: '1.0.16' };
 
 const banner = `// ==UserScript==
 // @name         AutoDuo
