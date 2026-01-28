@@ -2900,6 +2900,31 @@ var AutoDuo = (function (exports) {
                 // Extract KaTeX value
                 const value = extractKatexValue(token);
                 if (value) {
+                    // Check if this is a list of factors (e.g., "1, 4, 5, 10" or "1,4,5,10")
+                    const hasFactorsLabel = token.textContent?.toLowerCase().includes('factor') ?? false;
+                    const factorsMatch = value.match(/^[\d\s,]+$/);
+                    const hasMultipleCommas = (value.match(/,/g) ?? []).length >= 1;
+                    if ((factorsMatch && hasMultipleCommas) || hasFactorsLabel) {
+                        // Parse the factors list
+                        const factors = value.split(',')
+                            .map(s => {
+                            const num = parseInt(s.trim(), 10);
+                            return Number.isNaN(num) ? null : num;
+                        })
+                            .filter((n) => n !== null);
+                        if (factors.length > 1) {
+                            this.log('token', i, 'FACTORS LIST detected:', factors.join(', '));
+                            tokens.push({
+                                index: i,
+                                element: token,
+                                rawValue: value,
+                                numericValue: null,
+                                isFactorsList: true,
+                                factors,
+                            });
+                            continue;
+                        }
+                    }
                     const evaluated = evaluateMathExpression(value);
                     const isCompound = this.isCompoundExpression(value);
                     this.log('token', i, 'extracted KaTeX:', value, '=', evaluated);
@@ -2971,7 +2996,9 @@ var AutoDuo = (function (exports) {
             const pieCharts = tokens.filter(t => t.isPieChart);
             const blockDiagrams = tokens.filter(t => t.isBlockDiagram && !t.isRoundingTarget);
             const roundingTargets = tokens.filter(t => t.isRoundingTarget);
-            const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget);
+            const factorsLists = tokens.filter(t => t.isFactorsList);
+            const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget && !t.isFactorsList);
+            this.log('blockDiagrams:', blockDiagrams.length, 'pieCharts:', pieCharts.length, 'roundingTargets:', roundingTargets.length, 'factorsLists:', factorsLists.length, 'numbers:', numbers.length);
             // MODE 1: Rounding matching
             if (this.hasNearestRounding && roundingTargets.length > 0) {
                 this.matchRounding(tokens, roundingTargets, pairs, usedIndices);
@@ -2980,11 +3007,15 @@ var AutoDuo = (function (exports) {
             else if (blockDiagrams.length > 0 && numbers.length > 0) {
                 this.matchBlockDiagrams(blockDiagrams, numbers, pairs, usedIndices);
             }
-            // MODE 3: Pie chart matching
+            // MODE 3: Factors matching (numbers to their factors lists)
+            else if (factorsLists.length > 0 && numbers.length > 0) {
+                this.matchFactors(factorsLists, numbers, pairs, usedIndices);
+            }
+            // MODE 4: Pie chart matching
             else if (pieCharts.length > 0 && numbers.length > 0) {
                 this.matchPieCharts(pieCharts, numbers, pairs, usedIndices);
             }
-            // MODE 4: Expression matching
+            // MODE 5: Expression matching
             else {
                 this.matchExpressions(tokens, pairs, usedIndices);
             }
@@ -3022,6 +3053,39 @@ var AutoDuo = (function (exports) {
                         usedIndices.add(block.index);
                         usedIndices.add(num.index);
                         this.log('found block diagram pair:', block.rawValue, '=', num.rawValue);
+                        break;
+                    }
+                }
+            }
+        }
+        matchFactors(factorsLists, numbers, pairs, usedIndices) {
+            this.log('using factors matching mode');
+            // Helper function to check if all numbers in a list are factors of a given number
+            const areAllFactors = (factors, number) => {
+                if (number <= 0)
+                    return false;
+                return factors.every(factor => {
+                    if (factor <= 0 || factor > number)
+                        return false;
+                    return number % factor === 0;
+                });
+            };
+            for (const num of numbers) {
+                if (usedIndices.has(num.index))
+                    continue;
+                if (num.numericValue === null || Number.isNaN(num.numericValue))
+                    continue;
+                // Find matching factors list where all factors divide the number
+                for (const factorsList of factorsLists) {
+                    if (usedIndices.has(factorsList.index))
+                        continue;
+                    if (!factorsList.factors)
+                        continue;
+                    if (areAllFactors(factorsList.factors, num.numericValue)) {
+                        pairs.push({ first: num, second: factorsList });
+                        usedIndices.add(num.index);
+                        usedIndices.add(factorsList.index);
+                        this.log('found factors pair:', num.rawValue, '↔', factorsList.rawValue, '(factors:', factorsList.factors.join(', '), ')');
                         break;
                     }
                 }
