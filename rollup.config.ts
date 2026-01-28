@@ -1,8 +1,9 @@
 import { defineConfig } from 'rollup';
 import typescript from '@rollup/plugin-typescript';
 import resolve from '@rollup/plugin-node-resolve';
+import { readFileSync } from 'fs';
 
-const pkg = { version: '1.0.16' };
+const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
 
 const banner = `// ==UserScript==
 // @name         AutoDuo
