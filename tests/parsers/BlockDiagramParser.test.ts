@@ -91,5 +91,17 @@ describe('BlockDiagramParser', () => {
             expect(isBlockDiagram('<circle />')).toBe(false);
             expect(isBlockDiagram('')).toBe(false);
         });
+
+        it('should return false for pie charts with circle and colored paths', () => {
+            // Pie chart with <circle> and colored paths should not be detected as block diagram
+            const pieChartSvg = `
+                <svg>
+                    <circle cx="100" cy="100" r="98" fill="#F7F7F7" stroke="#37464F"/>
+                    <path d="M15 51L100 100" fill="#49C0F8" stroke="#1899D6"/>
+                    <path d="M100 2L100 100" fill="#49C0F8" stroke="#1899D6"/>
+                </svg>
+            `;
+            expect(isBlockDiagram(pieChartSvg)).toBe(false);
+        });
     });
 });

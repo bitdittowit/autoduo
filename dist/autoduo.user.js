@@ -941,6 +941,11 @@ var AutoDuo = (function (exports) {
     function isBlockDiagram(srcdoc) {
         if (!srcdoc)
             return false;
+        // IMPORTANT: Exclude pie charts (they have <circle> elements)
+        // Pie charts may have colored paths but they're circles, not block diagrams
+        if (srcdoc.includes('<circle')) {
+            return false;
+        }
         // Block diagrams have rect elements with specific fill colors
         const hasBlockColors = /#(?:1CB0F6|49C0F8)/i.test(srcdoc);
         const hasRects = /<rect[^>]*>/i.test(srcdoc);
@@ -3759,14 +3764,15 @@ var AutoDuo = (function (exports) {
         if (!srcdoc)
             return false;
         const svgContent = extractSvgContent(srcdoc);
+        // Exclude pie charts (they have <circle> elements or sector paths with L100 100)
+        const hasCircle = svgContent.includes('<circle');
+        const hasSectorPaths = /L\s*100\s+100/.test(svgContent);
+        if (hasCircle || hasSectorPaths)
+            return false;
         // Grids have rect or path elements with fill colors
         const hasColoredElements = /#(?:49C0F8|1CB0F6)/i.test(svgContent);
         const hasRects = /<rect[^>]*>/i.test(svgContent);
         const hasPaths = /<path[^>]*>/i.test(svgContent);
-        // Exclude pie charts (they have sector paths with L100 100)
-        const isPieChart = /L\s*100\s+100/.test(svgContent);
-        if (isPieChart)
-            return false;
         // Grids typically have multiple rect or path elements
         const rectCount = (svgContent.match(/<rect[^>]*>/gi) ?? []).length;
         const pathCount = (svgContent.match(/<path[^>]*>/gi) ?? []).length;

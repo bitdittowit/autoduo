@@ -94,14 +94,15 @@ export function isGridDiagram(srcdoc: string): boolean {
 
     const svgContent = extractSvgContent(srcdoc);
 
+    // Exclude pie charts (they have <circle> elements or sector paths with L100 100)
+    const hasCircle = svgContent.includes('<circle');
+    const hasSectorPaths = /L\s*100\s+100/.test(svgContent);
+    if (hasCircle || hasSectorPaths) return false;
+
     // Grids have rect or path elements with fill colors
     const hasColoredElements = /#(?:49C0F8|1CB0F6)/i.test(svgContent);
     const hasRects = /<rect[^>]*>/i.test(svgContent);
     const hasPaths = /<path[^>]*>/i.test(svgContent);
-
-    // Exclude pie charts (they have sector paths with L100 100)
-    const isPieChart = /L\s*100\s+100/.test(svgContent);
-    if (isPieChart) return false;
 
     // Grids typically have multiple rect or path elements
     const rectCount = (svgContent.match(/<rect[^>]*>/gi) ?? []).length;

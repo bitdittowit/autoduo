@@ -142,6 +142,12 @@ export function extractBlockDiagramValue(srcdoc: string): number | null {
 export function isBlockDiagram(srcdoc: string): boolean {
     if (!srcdoc) return false;
 
+    // IMPORTANT: Exclude pie charts (they have <circle> elements)
+    // Pie charts may have colored paths but they're circles, not block diagrams
+    if (srcdoc.includes('<circle')) {
+        return false;
+    }
+
     // Block diagrams have rect elements with specific fill colors
     const hasBlockColors = /#(?:1CB0F6|49C0F8)/i.test(srcdoc);
     const hasRects = /<rect[^>]*>/i.test(srcdoc);
