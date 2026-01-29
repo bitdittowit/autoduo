@@ -27,7 +27,10 @@ interface IIframeWindow extends Window {
     postOutputVariables?: () => void;
     duo?: { onFirstInteraction?: () => void };
     duoDynamic?: { onInteraction?: () => void };
-    exprBuild?: { entries?: unknown[] };
+    exprBuild?: {
+        entries?: unknown[];
+        notifyUpdateSubscribers?: () => void;
+    };
     tokens?: (number | string)[];
 }
 
@@ -514,15 +517,31 @@ export class ExpressionBuildSolver extends BaseSolver {
             const iframeWindow = iframe.contentWindow as IIframeWindow | null;
             if (!iframeWindow) return;
 
-            // Set filled_entry_indices
-            if (typeof iframeWindow.getOutputVariables === 'function') {
-                const vars = iframeWindow.getOutputVariables();
-                if (vars) {
-                    vars.filled_entry_indices = solution;
-                    this.log('set filled_entry_indices');
+            // IMPORTANT: Set exprBuild.entries directly with token values (not indices)
+            // The component's update subscriber will then populate filled_entry_indices
+            if (iframeWindow.exprBuild && iframeWindow.tokens) {
+                const tokens = iframeWindow.tokens;
+                const entries: (string | number | null)[] = solution.map((idx) => {
+                    const token = tokens[idx];
+                    return token !== undefined ? token : null;
+                });
+
+                // Set entries array
+                if (Array.isArray(iframeWindow.exprBuild.entries)) {
+                    for (let i = 0; i < entries.length && i < iframeWindow.exprBuild.entries.length; i++) {
+                        iframeWindow.exprBuild.entries[i] = entries[i];
+                    }
+                    this.log('set exprBuild.entries:', entries);
+
+                    // Notify the component of changes
+                    if (typeof iframeWindow.exprBuild.notifyUpdateSubscribers === 'function') {
+                        iframeWindow.exprBuild.notifyUpdateSubscribers();
+                    }
+                } else {
+                    this.logError('exprBuild.entries is not an array');
                 }
-            } else if (iframeWindow.OUTPUT_VARS) {
-                iframeWindow.OUTPUT_VARS.filled_entry_indices = solution;
+            } else {
+                this.logError('exprBuild or tokens not found in iframe');
             }
 
             // Trigger callbacks
