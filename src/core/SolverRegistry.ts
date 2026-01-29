@@ -29,6 +29,7 @@ import { PieChartSelectFractionSolver } from '../solvers/PieChartSelectFractionS
 import { BlockDiagramChoiceSolver } from '../solvers/BlockDiagramChoiceSolver';
 import { BlockDiagramTextInputSolver } from '../solvers/BlockDiagramTextInputSolver';
 import { SolveForXSolver } from '../solvers/SolveForXSolver';
+import { FractionToDecimalChoiceSolver } from '../solvers/FractionToDecimalChoiceSolver';
 
 /**
  * Регистр солверов - выбирает подходящий солвер для задания
@@ -104,6 +105,7 @@ export class SolverRegistry {
         this.register(new VisualGCFSolver()); // Find GCF with visual block diagrams
         this.register(new GreatestCommonFactorSolver()); // Find GCF with text numbers
         this.register(new SelectEquivalentFractionSolver());
+        this.register(new FractionToDecimalChoiceSolver()); // Convert fraction to decimal
         this.register(new ComparisonChoiceSolver());
         this.register(new SelectOperatorSolver());
         this.register(new PieChartTextInputSolver());
