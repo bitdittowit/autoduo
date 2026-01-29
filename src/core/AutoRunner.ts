@@ -150,7 +150,8 @@ export class AutoRunner {
                     await delay(this.config.delayAfterSolve);
 
                     // Click continue/check button (wait for it to become enabled)
-                    const clicked = await clickContinueButtonAsync(5000);
+                    // Use longer timeout for table challenges which may need more processing time
+                    const clicked = await clickContinueButtonAsync(10000);
                     if (!clicked) {
                         logger.warn('AutoRunner: continue button not clicked (may be disabled or not found)');
                         // Don't increment stuck counter here - the challenge was solved,

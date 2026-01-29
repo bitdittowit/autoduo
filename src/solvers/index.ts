@@ -24,6 +24,12 @@ export { SolveForXSolver } from './SolveForXSolver';
 export { FractionToDecimalChoiceSolver } from './FractionToDecimalChoiceSolver';
 export { RatioChoiceSolver } from './RatioChoiceSolver';
 export { TableFillSolver } from './TableFillSolver';
+export { PlotPointsSolver } from './PlotPointsSolver';
+export { GraphLineSolver } from './GraphLineSolver';
+export { SelectEquationSolver } from './SelectEquationSolver';
+export { SelectConstantSolver } from './SelectConstantSolver';
+export { SelectMatchInequalitySolver } from './SelectMatchInequalitySolver';
+export { SelectAllMatchSolver } from './SelectAllMatchSolver';
 
 // Re-export types
 export type { ISolver, ISolverResult, IChallengeContext } from '../types';

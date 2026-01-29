@@ -106,35 +106,28 @@ export class TypeAnswerSolver extends BaseSolver {
             return null;
         }
 
-        // If equation has = sign, check if it's truly an inequality or just an equation
+        // Check for explicit inequality operators first (before checking for =)
+        const hasExplicitInequality =
+            equation.includes('>=') || equation.includes('<=') ||
+            equation.includes('\\ge') || equation.includes('\\le') ||
+            equation.includes('\\gt') || equation.includes('\\lt');
+
+        // If equation has = sign, it's an equation, not an inequality (unless it has explicit inequality operators)
         if (equation.includes('=')) {
-            // Check for explicit inequality operators
-            const hasExplicitInequality =
-                equation.includes('>=') || equation.includes('<=') ||
-                equation.includes('\\ge') || equation.includes('\\le') ||
-                equation.includes('\\gt') || equation.includes('\\lt');
-
+            // If there's an = sign but no explicit inequality operators, it's an equation
             if (!hasExplicitInequality) {
-                // Check if > or < characters are part of \left or \right commands
-                // If they are, then it's not an inequality
-                const hasLeftRight = equation.includes('\\left') || equation.includes('\\right');
-
-                // If there's an = sign, no explicit inequality operators, and any >/< are from \left/\right,
-                // then this is definitely an equation, not an inequality
-                if (hasLeftRight || (!equation.includes('>') && !equation.includes('<'))) {
-                    return null; // This is an equation, not an inequality
-                }
+                return null; // This is an equation, not an inequality
             }
         }
 
-        // Check for inequality operators (re-check for clarity)
+        // Check for inequality operators (only if no = sign, or if = sign with explicit inequality operators)
+        // Must check for >= and <= BEFORE checking for standalone > or <
         const hasInequality =
-            equation.includes('>=') || equation.includes('<=') ||
-            equation.includes('\\ge') || equation.includes('\\le') ||
-            equation.includes('\\gt') || equation.includes('\\lt') ||
+            hasExplicitInequality ||
             // Check for standalone > or < that are not part of \left or \right commands
-            (equation.includes('>') && !equation.includes('\\left') && !equation.includes('\\right')) ||
-            (equation.includes('<') && !equation.includes('\\left') && !equation.includes('\\right'));
+            // AND not part of >= or <=
+            (equation.includes('>') && !equation.includes('\\left') && !equation.includes('\\right') && !equation.includes('>=')) ||
+            (equation.includes('<') && !equation.includes('\\left') && !equation.includes('\\right') && !equation.includes('<='));
 
         if (!hasInequality) {
             return null;

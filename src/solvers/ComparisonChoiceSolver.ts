@@ -8,7 +8,7 @@
 import { BaseSolver } from './BaseSolver';
 import type { IChallengeContext, ISolverResult } from '../types';
 import { parseFractionExpression } from '../parsers/FractionParser';
-import { cleanLatexWrappers, convertLatexFractions } from '../parsers/latex';
+import { cleanLatexWrappers, cleanLatexForEval } from '../parsers/latex';
 import { evaluateMathExpression } from '../math/expressions';
 
 type ComparisonOperator = '<' | '>' | '<=' | '>=';
@@ -37,18 +37,26 @@ export class ComparisonChoiceSolver extends BaseSolver {
 
         const text = annotation.textContent;
 
-        // Don't match if equation has = sign (that's for EquationBlankSolver)
-        if (text.includes('=') && !text.includes('>=') && !text.includes('<=') &&
-            !text.includes('\\ge') && !text.includes('\\le')) {
+        // Check for explicit comparison operators (not part of \left or \right)
+        // Must check for >= and <= BEFORE checking for standalone > or <
+        const hasExplicitComparison =
+            text.includes('>=') || text.includes('<=') ||
+            text.includes('\\ge') || text.includes('\\le') ||
+            text.includes('\\gt') || text.includes('\\lt') ||
+            // Standalone > or < that are not part of \left or \right commands
+            // AND not part of >= or <=
+            (text.includes('>') && !text.includes('\\left') && !text.includes('\\right') && !text.includes('>=')) ||
+            (text.includes('<') && !text.includes('\\left') && !text.includes('\\right') && !text.includes('<='));
+
+        // Don't match if equation has = sign without explicit comparison operators
+        // (that's for EquationBlankSolver)
+        if (text.includes('=') && !hasExplicitComparison) {
             return false;
         }
 
-        const hasComparison = text.includes('>') || text.includes('<') ||
-            text.includes('\\gt') || text.includes('\\lt') ||
-            text.includes('\\ge') || text.includes('\\le');
         const hasBlank = text.includes('\\duoblank');
 
-        return hasComparison && hasBlank;
+        return hasExplicitComparison && hasBlank;
     }
 
     /**
@@ -130,10 +138,30 @@ export class ComparisonChoiceSolver extends BaseSolver {
      * Определяет оператор сравнения
      */
     private detectOperator(text: string): ComparisonOperator | null {
-        if (text.includes('<=') || text.includes('\\le')) return '<=';
-        if (text.includes('>=') || text.includes('\\ge')) return '>=';
-        if (text.includes('<') || text.includes('\\lt')) return '<';
-        if (text.includes('>') || text.includes('\\gt')) return '>';
+        // Check for explicit comparison operators first
+        if (text.includes('\\le') || text.includes('\\ge')) {
+            if (text.includes('\\le')) return '<=';
+            if (text.includes('\\ge')) return '>=';
+        }
+        if (text.includes('\\gt')) return '>';
+        if (text.includes('\\lt')) return '<';
+
+        // Check for >= and <= (but not as part of \left or \right)
+        if (text.includes('>=') && !text.includes('\\left') && !text.includes('\\right')) {
+            return '>=';
+        }
+        if (text.includes('<=') && !text.includes('\\left') && !text.includes('\\right')) {
+            return '<=';
+        }
+
+        // Check for standalone > or < (but not as part of \left or \right)
+        if (text.includes('>') && !text.includes('\\left') && !text.includes('\\right') && !text.includes('>=')) {
+            return '>';
+        }
+        if (text.includes('<') && !text.includes('\\left') && !text.includes('\\right') && !text.includes('<=')) {
+            return '<';
+        }
+
         return null;
     }
 
@@ -144,7 +172,8 @@ export class ComparisonChoiceSolver extends BaseSolver {
         const cleaned = cleanLatexWrappers(eqText);
 
         // Split by operator to get left side
-        const operators = ['<=', '>=', '\\le', '\\ge', '<', '>', '\\lt', '\\gt'];
+        // Check longer operators first (>=, <=) before shorter ones (<, >)
+        const operators = ['<=', '>=', '\\le', '\\ge', '\\lt', '\\gt', '<', '>', '='];
         let leftSide = cleaned;
 
         for (const op of operators) {
@@ -160,8 +189,9 @@ export class ComparisonChoiceSolver extends BaseSolver {
         // Remove \duoblank{...} before evaluating (replace with empty string)
         leftSide = leftSide.replace(/\\duoblank\{[^}]*\}/g, '');
 
-        // Convert fractions to evaluable format
-        leftSide = convertLatexFractions(leftSide);
+        // Use cleanLatexForEval to ensure all LaTeX operators are converted
+        // This handles \left(, \right), \cdot, fractions, etc.
+        leftSide = cleanLatexForEval(leftSide);
 
         return evaluateMathExpression(leftSide);
     }

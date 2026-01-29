@@ -32,6 +32,12 @@ import { SolveForXSolver } from '../solvers/SolveForXSolver';
 import { FractionToDecimalChoiceSolver } from '../solvers/FractionToDecimalChoiceSolver';
 import { RatioChoiceSolver } from '../solvers/RatioChoiceSolver';
 import { TableFillSolver } from '../solvers/TableFillSolver';
+import { PlotPointsSolver } from '../solvers/PlotPointsSolver';
+import { GraphLineSolver } from '../solvers/GraphLineSolver';
+import { SelectEquationSolver } from '../solvers/SelectEquationSolver';
+import { SelectConstantSolver } from '../solvers/SelectConstantSolver';
+import { SelectMatchInequalitySolver } from '../solvers/SelectMatchInequalitySolver';
+import { SelectAllMatchSolver } from '../solvers/SelectAllMatchSolver';
 
 /**
  * Регистр солверов - выбирает подходящий солвер для задания
@@ -91,6 +97,12 @@ export class SolverRegistry {
         // Note: InteractiveSliderSolver must be BEFORE ExpressionBuildSolver
         // because NumberLine sliders may contain "ExpressionBuild" in their iframe code
         this.register(new TableFillSolver()); // Must be before InteractiveSliderSolver (Table might contain NumberLine)
+        this.register(new SelectConstantSolver()); // Must be before SelectEquationSolver (selecting constant is more specific)
+        this.register(new SelectAllMatchSolver()); // Must be before other select solvers (select all that match is specific)
+        this.register(new SelectMatchInequalitySolver()); // Must be before InteractiveSliderSolver (selecting match with NumberLine is more specific)
+        this.register(new SelectEquationSolver()); // Must be before PlotPointsSolver and GraphLineSolver (selecting equation is more specific)
+        this.register(new PlotPointsSolver()); // Must be before GraphLineSolver (Grid2D is more specific than MathDiagram)
+        this.register(new GraphLineSolver()); // Must be before InteractiveSliderSolver (MathDiagram might contain NumberLine)
         this.register(new InteractiveSliderSolver());
         this.register(new ExpressionBuildSolver());
         this.register(new InteractiveSpinnerSolver());

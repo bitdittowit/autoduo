@@ -113,6 +113,10 @@ export function convertLatexOperators(str: string): string {
         .replace(/\\times/g, '*')     // \times -> *
         .replace(/\\div/g, '/')       // \div -> /
         .replace(/\\pm/g, '±')        // \pm -> ±
+        .replace(/\\ge/g, '≥')        // \ge -> ≥
+        .replace(/\\geq/g, '≥')       // \geq -> ≥
+        .replace(/\\le/g, '≤')        // \le -> ≤
+        .replace(/\\leq/g, '≤')       // \leq -> ≤
         .replace(/×/g, '*')           // Unicode multiplication
         .replace(/÷/g, '/')           // Unicode division
         .replace(/−/g, '-')           // Unicode minus

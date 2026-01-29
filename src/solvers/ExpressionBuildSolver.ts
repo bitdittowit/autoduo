@@ -32,6 +32,14 @@ interface IIframeWindow extends Window {
         notifyUpdateSubscribers?: () => void;
     };
     tokens?: (number | string)[];
+    mathDiagram?: {
+        tokens?: (number | string)[];
+        exprBuild?: {
+            entries?: unknown[];
+            notifyUpdateSubscribers?: () => void;
+        };
+    };
+    eval?: (code: string) => unknown;
 }
 
 export class ExpressionBuildSolver extends BaseSolver {
@@ -517,44 +525,141 @@ export class ExpressionBuildSolver extends BaseSolver {
             const iframeWindow = iframe.contentWindow as IIframeWindow | null;
             if (!iframeWindow) return;
 
-            // IMPORTANT: Set exprBuild.entries directly with token values (not indices)
-            // The component's update subscriber will then populate filled_entry_indices
-            if (iframeWindow.exprBuild && iframeWindow.tokens) {
-                const tokens = iframeWindow.tokens;
+            // Get tokens - try multiple methods
+            let tokens: (number | string)[] | null = null;
+            let exprBuild: { entries?: unknown[]; notifyUpdateSubscribers?: () => void } | null = null;
+
+            // Method 1: Try direct window access
+            if (iframeWindow.tokens && iframeWindow.exprBuild) {
+                tokens = iframeWindow.tokens;
+                exprBuild = iframeWindow.exprBuild;
+                this.logDebug('accessed exprBuild and tokens from window directly');
+            }
+
+            // Method 2: Try window.mathDiagram (fallback)
+            if ((!tokens || !exprBuild) && iframeWindow.mathDiagram) {
+                const mathDiagram = iframeWindow.mathDiagram as unknown as {
+                    tokens?: (number | string)[];
+                    exprBuild?: { entries?: unknown[]; notifyUpdateSubscribers?: () => void };
+                };
+                if (mathDiagram.tokens && mathDiagram.exprBuild) {
+                    tokens = mathDiagram.tokens;
+                    exprBuild = mathDiagram.exprBuild;
+                    this.logDebug('accessed exprBuild and tokens from window.mathDiagram');
+                }
+            }
+
+            // Method 3: Use eval to access from script scope
+            if ((!tokens || !exprBuild) && iframeWindow.eval) {
+                try {
+                    // Get tokens via eval
+                    const tokensEval = iframeWindow.eval(`
+                        (function() {
+                            if (typeof tokens !== 'undefined') {
+                                return tokens;
+                            }
+                            return null;
+                        })()
+                    `) as (number | string)[] | null;
+
+                    if (tokensEval) {
+                        tokens = tokensEval;
+                        this.logDebug('accessed tokens via eval');
+                    }
+
+                    // Try to get exprBuild reference via eval
+                    // Note: We can't directly return exprBuild object reference, so we'll set it via eval
+                    const hasExprBuild = iframeWindow.eval(`
+                        (function() {
+                            return typeof exprBuild !== 'undefined' && exprBuild !== null;
+                        })()
+                    `) as boolean;
+
+                    if (hasExprBuild && tokens) {
+                        // Set entries directly via eval in iframe scope using solution indices
+                        // We can't JSON.stringify because tokens might contain DOM elements
+                        // Instead, we'll set entries by directly accessing tokens array in iframe scope
+                        const solutionIndicesStr = JSON.stringify(solution);
+                        const success = iframeWindow.eval(`
+                            (function() {
+                                if (typeof exprBuild !== 'undefined' && typeof tokens !== 'undefined' && exprBuild.entries) {
+                                    const solutionIndices = ${solutionIndicesStr};
+                                    for (let i = 0; i < solutionIndices.length && i < exprBuild.entries.length; i++) {
+                                        const tokenIdx = solutionIndices[i];
+                                        if (tokenIdx >= 0 && tokenIdx < tokens.length) {
+                                            exprBuild.entries[i] = tokens[tokenIdx];
+                                        } else {
+                                            exprBuild.entries[i] = null;
+                                        }
+                                    }
+                                    if (typeof exprBuild.notifyUpdateSubscribers === 'function') {
+                                        exprBuild.notifyUpdateSubscribers();
+                                    }
+                                    return true;
+                                }
+                                return false;
+                            })()
+                        `) as boolean;
+
+                        if (success) {
+                            this.log('set exprBuild.entries via eval using indices:', solution);
+
+                            // Trigger callbacks
+                            if (typeof iframeWindow.postOutputVariables === 'function') {
+                                iframeWindow.postOutputVariables();
+                            }
+                            if (iframeWindow.duo?.onFirstInteraction) {
+                                iframeWindow.duo.onFirstInteraction();
+                            }
+                            if (iframeWindow.duoDynamic?.onInteraction) {
+                                iframeWindow.duoDynamic.onInteraction();
+                            }
+                            return; // Successfully set via eval
+                        }
+                    }
+                } catch (evalError) {
+                    this.logDebug('eval failed:', evalError);
+                }
+            }
+
+            // If we have direct references, use them
+            if (tokens && exprBuild) {
+                // IMPORTANT: Set exprBuild.entries directly with token values (not indices)
+                // The component's update subscriber will then populate filled_entry_indices
                 const entries: (string | number | null)[] = solution.map((idx) => {
-                    const token = tokens[idx];
+                    const token = tokens![idx];
                     return token !== undefined ? token : null;
                 });
 
                 // Set entries array
-                if (Array.isArray(iframeWindow.exprBuild.entries)) {
-                    for (let i = 0; i < entries.length && i < iframeWindow.exprBuild.entries.length; i++) {
-                        iframeWindow.exprBuild.entries[i] = entries[i];
+                if (Array.isArray(exprBuild.entries)) {
+                    for (let i = 0; i < entries.length && i < exprBuild.entries.length; i++) {
+                        exprBuild.entries[i] = entries[i];
                     }
                     this.log('set exprBuild.entries:', entries);
 
                     // Notify the component of changes
-                    if (typeof iframeWindow.exprBuild.notifyUpdateSubscribers === 'function') {
-                        iframeWindow.exprBuild.notifyUpdateSubscribers();
+                    if (typeof exprBuild.notifyUpdateSubscribers === 'function') {
+                        exprBuild.notifyUpdateSubscribers();
                     }
                 } else {
                     this.logError('exprBuild.entries is not an array');
                 }
+
+                // Trigger callbacks
+                if (typeof iframeWindow.postOutputVariables === 'function') {
+                    iframeWindow.postOutputVariables();
+                }
+
+                if (iframeWindow.duo?.onFirstInteraction) {
+                    iframeWindow.duo.onFirstInteraction();
+                }
+
+                if (iframeWindow.duoDynamic?.onInteraction) {
+                    iframeWindow.duoDynamic.onInteraction();
+                }
             } else {
                 this.logError('exprBuild or tokens not found in iframe');
-            }
-
-            // Trigger callbacks
-            if (typeof iframeWindow.postOutputVariables === 'function') {
-                iframeWindow.postOutputVariables();
-            }
-
-            if (iframeWindow.duo?.onFirstInteraction) {
-                iframeWindow.duo.onFirstInteraction();
-            }
-
-            if (iframeWindow.duoDynamic?.onInteraction) {
-                iframeWindow.duoDynamic.onInteraction();
             }
         } catch (e) {
             this.logError('error setting solution:', e);

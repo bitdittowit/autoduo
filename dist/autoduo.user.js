@@ -1077,6 +1077,10 @@ var AutoDuo = (function (exports) {
             .replace(/\\times/g, '*') // \times -> *
             .replace(/\\div/g, '/') // \div -> /
             .replace(/\\pm/g, '±') // \pm -> ±
+            .replace(/\\ge/g, '≥') // \ge -> ≥
+            .replace(/\\geq/g, '≥') // \geq -> ≥
+            .replace(/\\le/g, '≤') // \le -> ≤
+            .replace(/\\leq/g, '≤') // \leq -> ≤
             .replace(/×/g, '*') // Unicode multiplication
             .replace(/÷/g, '/') // Unicode division
             .replace(/−/g, '-') // Unicode minus
@@ -2006,30 +2010,24 @@ var AutoDuo = (function (exports) {
             if (!hasBlank) {
                 return null;
             }
-            // If equation has = sign, check if it's truly an inequality or just an equation
+            // Check for explicit inequality operators first (before checking for =)
+            const hasExplicitInequality = equation.includes('>=') || equation.includes('<=') ||
+                equation.includes('\\ge') || equation.includes('\\le') ||
+                equation.includes('\\gt') || equation.includes('\\lt');
+            // If equation has = sign, it's an equation, not an inequality (unless it has explicit inequality operators)
             if (equation.includes('=')) {
-                // Check for explicit inequality operators
-                const hasExplicitInequality = equation.includes('>=') || equation.includes('<=') ||
-                    equation.includes('\\ge') || equation.includes('\\le') ||
-                    equation.includes('\\gt') || equation.includes('\\lt');
+                // If there's an = sign but no explicit inequality operators, it's an equation
                 if (!hasExplicitInequality) {
-                    // Check if > or < characters are part of \left or \right commands
-                    // If they are, then it's not an inequality
-                    const hasLeftRight = equation.includes('\\left') || equation.includes('\\right');
-                    // If there's an = sign, no explicit inequality operators, and any >/< are from \left/\right,
-                    // then this is definitely an equation, not an inequality
-                    if (hasLeftRight || (!equation.includes('>') && !equation.includes('<'))) {
-                        return null; // This is an equation, not an inequality
-                    }
+                    return null; // This is an equation, not an inequality
                 }
             }
-            // Check for inequality operators (re-check for clarity)
-            const hasInequality = equation.includes('>=') || equation.includes('<=') ||
-                equation.includes('\\ge') || equation.includes('\\le') ||
-                equation.includes('\\gt') || equation.includes('\\lt') ||
+            // Check for inequality operators (only if no = sign, or if = sign with explicit inequality operators)
+            // Must check for >= and <= BEFORE checking for standalone > or <
+            const hasInequality = hasExplicitInequality ||
                 // Check for standalone > or < that are not part of \left or \right commands
-                (equation.includes('>') && !equation.includes('\\left') && !equation.includes('\\right')) ||
-                (equation.includes('<') && !equation.includes('\\left') && !equation.includes('\\right'));
+                // AND not part of >= or <=
+                (equation.includes('>') && !equation.includes('\\left') && !equation.includes('\\right') && !equation.includes('>=')) ||
+                (equation.includes('<') && !equation.includes('\\left') && !equation.includes('\\right') && !equation.includes('<='));
             if (!hasInequality) {
                 return null;
             }
@@ -2161,16 +2159,22 @@ var AutoDuo = (function (exports) {
             if (!annotation?.textContent)
                 return false;
             const text = annotation.textContent;
-            // Don't match if equation has = sign (that's for EquationBlankSolver)
-            if (text.includes('=') && !text.includes('>=') && !text.includes('<=') &&
-                !text.includes('\\ge') && !text.includes('\\le')) {
+            // Check for explicit comparison operators (not part of \left or \right)
+            // Must check for >= and <= BEFORE checking for standalone > or <
+            const hasExplicitComparison = text.includes('>=') || text.includes('<=') ||
+                text.includes('\\ge') || text.includes('\\le') ||
+                text.includes('\\gt') || text.includes('\\lt') ||
+                // Standalone > or < that are not part of \left or \right commands
+                // AND not part of >= or <=
+                (text.includes('>') && !text.includes('\\left') && !text.includes('\\right') && !text.includes('>=')) ||
+                (text.includes('<') && !text.includes('\\left') && !text.includes('\\right') && !text.includes('<='));
+            // Don't match if equation has = sign without explicit comparison operators
+            // (that's for EquationBlankSolver)
+            if (text.includes('=') && !hasExplicitComparison) {
                 return false;
             }
-            const hasComparison = text.includes('>') || text.includes('<') ||
-                text.includes('\\gt') || text.includes('\\lt') ||
-                text.includes('\\ge') || text.includes('\\le');
             const hasBlank = text.includes('\\duoblank');
-            return hasComparison && hasBlank;
+            return hasExplicitComparison && hasBlank;
         }
         /**
          * Решает задание
@@ -2237,14 +2241,31 @@ var AutoDuo = (function (exports) {
          * Определяет оператор сравнения
          */
         detectOperator(text) {
-            if (text.includes('<=') || text.includes('\\le'))
-                return '<=';
-            if (text.includes('>=') || text.includes('\\ge'))
-                return '>=';
-            if (text.includes('<') || text.includes('\\lt'))
-                return '<';
-            if (text.includes('>') || text.includes('\\gt'))
+            // Check for explicit comparison operators first
+            if (text.includes('\\le') || text.includes('\\ge')) {
+                if (text.includes('\\le'))
+                    return '<=';
+                if (text.includes('\\ge'))
+                    return '>=';
+            }
+            if (text.includes('\\gt'))
                 return '>';
+            if (text.includes('\\lt'))
+                return '<';
+            // Check for >= and <= (but not as part of \left or \right)
+            if (text.includes('>=') && !text.includes('\\left') && !text.includes('\\right')) {
+                return '>=';
+            }
+            if (text.includes('<=') && !text.includes('\\left') && !text.includes('\\right')) {
+                return '<=';
+            }
+            // Check for standalone > or < (but not as part of \left or \right)
+            if (text.includes('>') && !text.includes('\\left') && !text.includes('\\right') && !text.includes('>=')) {
+                return '>';
+            }
+            if (text.includes('<') && !text.includes('\\left') && !text.includes('\\right') && !text.includes('<=')) {
+                return '<';
+            }
             return null;
         }
         /**
@@ -2253,7 +2274,8 @@ var AutoDuo = (function (exports) {
         extractLeftValue(eqText, _operator) {
             const cleaned = cleanLatexWrappers(eqText);
             // Split by operator to get left side
-            const operators = ['<=', '>=', '\\le', '\\ge', '<', '>', '\\lt', '\\gt'];
+            // Check longer operators first (>=, <=) before shorter ones (<, >)
+            const operators = ['<=', '>=', '\\le', '\\ge', '\\lt', '\\gt', '<', '>', '='];
             let leftSide = cleaned;
             for (const op of operators) {
                 if (leftSide.includes(op)) {
@@ -2266,8 +2288,9 @@ var AutoDuo = (function (exports) {
             }
             // Remove \duoblank{...} before evaluating (replace with empty string)
             leftSide = leftSide.replace(/\\duoblank\{[^}]*\}/g, '');
-            // Convert fractions to evaluable format
-            leftSide = convertLatexFractions(leftSide);
+            // Use cleanLatexForEval to ensure all LaTeX operators are converted
+            // This handles \left(, \right), \cdot, fractions, etc.
+            leftSide = cleanLatexForEval(leftSide);
             return evaluateMathExpression(leftSide);
         }
         /**
@@ -3913,7 +3936,7 @@ var AutoDuo = (function (exports) {
                     this.log('token', i, 'is disabled, skipping');
                     continue;
                 }
-                // Check for "Nearest X" label
+                // Check for "Nearest X" or "UNIT RATE" label
                 const nearestLabel = token.querySelector('._27M4R');
                 if (nearestLabel) {
                     const labelText = nearestLabel.textContent ?? '';
@@ -3930,6 +3953,24 @@ var AutoDuo = (function (exports) {
                         }
                         else {
                             this.log('token', i, 'failed to extract rounding value');
+                        }
+                    }
+                    // Check for "UNIT RATE" label
+                    if (labelText.toUpperCase().includes('UNIT RATE')) {
+                        const value = extractKatexValue(token);
+                        if (value) {
+                            const evaluated = evaluateMathExpression(value);
+                            if (evaluated !== null) {
+                                this.log('token', i, 'extracted UNIT RATE:', value, '=', evaluated);
+                                tokens.push({
+                                    index: i,
+                                    element: token,
+                                    rawValue: value,
+                                    numericValue: evaluated,
+                                    isUnitRate: true,
+                                });
+                                continue;
+                            }
                         }
                     }
                 }
@@ -4010,6 +4051,22 @@ var AutoDuo = (function (exports) {
                             });
                             continue;
                         }
+                    }
+                    // Check if this is a linear equation (y = mx or y = mx + b)
+                    const equationCoefficient = this.extractEquationCoefficient(value);
+                    if (equationCoefficient !== null) {
+                        this.log('token', i, 'extracted equation coefficient:', value, '→', equationCoefficient);
+                        tokens.push({
+                            index: i,
+                            element: token,
+                            rawValue: value,
+                            numericValue: equationCoefficient,
+                            isEquation: true,
+                            equationCoefficient,
+                            isExpression: true,
+                            isPieChart: false,
+                        });
+                        continue;
                     }
                     const evaluated = evaluateMathExpression(value);
                     const isCompound = this.isCompoundExpression(value);
@@ -4101,25 +4158,31 @@ var AutoDuo = (function (exports) {
             const blockDiagrams = tokens.filter(t => t.isBlockDiagram && !t.isRoundingTarget);
             const roundingTargets = tokens.filter(t => t.isRoundingTarget);
             const factorsLists = tokens.filter(t => t.isFactorsList);
-            const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget && !t.isFactorsList);
-            this.log('blockDiagrams:', blockDiagrams.length, 'pieCharts:', pieCharts.length, 'roundingTargets:', roundingTargets.length, 'factorsLists:', factorsLists.length, 'numbers:', numbers.length);
+            const equations = tokens.filter(t => t.isEquation);
+            const unitRates = tokens.filter(t => t.isUnitRate);
+            const numbers = tokens.filter(t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget && !t.isFactorsList && !t.isEquation && !t.isUnitRate);
+            this.log('blockDiagrams:', blockDiagrams.length, 'pieCharts:', pieCharts.length, 'roundingTargets:', roundingTargets.length, 'factorsLists:', factorsLists.length, 'equations:', equations.length, 'unitRates:', unitRates.length, 'numbers:', numbers.length);
             // MODE 1: Rounding matching
             if (this.hasNearestRounding && roundingTargets.length > 0) {
                 this.matchRounding(tokens, roundingTargets, pairs, usedIndices);
             }
-            // MODE 2: Block diagram matching (blocks to numbers with same value)
+            // MODE 2: Equation to Unit Rate matching (equations like y=5x with unit rate values)
+            else if (equations.length > 0 && unitRates.length > 0) {
+                this.matchEquationsToUnitRates(equations, unitRates, pairs, usedIndices);
+            }
+            // MODE 3: Block diagram matching (blocks to numbers with same value)
             else if (blockDiagrams.length > 0 && numbers.length > 0) {
                 this.matchBlockDiagrams(blockDiagrams, numbers, pairs, usedIndices);
             }
-            // MODE 3: Factors matching (numbers to their factors lists)
+            // MODE 4: Factors matching (numbers to their factors lists)
             else if (factorsLists.length > 0 && numbers.length > 0) {
                 this.matchFactors(factorsLists, numbers, pairs, usedIndices);
             }
-            // MODE 4: Pie chart matching
+            // MODE 5: Pie chart matching
             else if (pieCharts.length > 0 && numbers.length > 0) {
                 this.matchPieCharts(pieCharts, numbers, pairs, usedIndices);
             }
-            // MODE 5: Expression matching
+            // MODE 6: Expression matching
             else {
                 this.matchExpressions(tokens, pairs, usedIndices);
             }
@@ -4300,6 +4363,81 @@ var AutoDuo = (function (exports) {
                 // Fallback: match any tokens with same numeric value
                 this.matchFallback(tokens, pairs, usedIndices);
             }
+        }
+        /**
+         * Извлекает коэффициент из линейного уравнения вида y = mx или y = mx + b
+         * Поддерживает дроби: y = (2/3)x, y = \frac{2}{3}x
+         */
+        extractEquationCoefficient(equation) {
+            // Clean LaTeX
+            let cleaned = cleanLatexWrappers(equation);
+            cleaned = convertLatexOperators(cleaned);
+            cleaned = convertLatexFractions(cleaned);
+            cleaned = cleaned.replace(/\s+/g, '');
+            // Pattern 1: y = mx (simple number coefficient)
+            // Pattern: y = (number)x or y = -(number)x
+            let match = cleaned.match(/^y=(-?\d+\.?\d*)x$/);
+            if (match && match[1] !== undefined) {
+                const m = parseFloat(match[1]);
+                if (!Number.isNaN(m)) {
+                    return m;
+                }
+            }
+            // Pattern 2: y = (fraction)x or y = (a/b)x
+            // First try to match y = (expression)x where expression can be evaluated
+            match = cleaned.match(/^y=(.+?)x$/);
+            if (match && match[1] !== undefined) {
+                const coefficientExpr = match[1];
+                // Remove outer parentheses if present
+                const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+                const evaluated = evaluateMathExpression(cleanedCoeff);
+                if (evaluated !== null) {
+                    return evaluated;
+                }
+            }
+            // Pattern 3: y = mx + b or y = mx - b
+            match = cleaned.match(/^y=(-?\d+\.?\d*)x[+-](-?\d+\.?\d*)$/);
+            if (match && match[1] !== undefined) {
+                const m = parseFloat(match[1]);
+                if (!Number.isNaN(m)) {
+                    return m; // Return coefficient, ignore b for matching purposes
+                }
+            }
+            // Pattern 4: y = (fraction)x + b
+            match = cleaned.match(/^y=(.+?)x[+-](-?\d+\.?\d*)$/);
+            if (match && match[1] !== undefined) {
+                const coefficientExpr = match[1];
+                const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+                const evaluated = evaluateMathExpression(cleanedCoeff);
+                if (evaluated !== null) {
+                    return evaluated;
+                }
+            }
+            return null;
+        }
+        /**
+         * Сопоставляет уравнения (y = mx) с unit rate значениями
+         */
+        matchEquationsToUnitRates(equations, unitRates, pairs, usedIndices) {
+            this.log('matchEquationsToUnitRates: comparing', equations.length, 'equations with', unitRates.length, 'unit rates');
+            for (const equation of equations) {
+                if (usedIndices.has(equation.index) || equation.equationCoefficient === undefined)
+                    continue;
+                const coeff = equation.equationCoefficient;
+                for (const unitRate of unitRates) {
+                    if (usedIndices.has(unitRate.index) || unitRate.numericValue === null)
+                        continue;
+                    // Match coefficient with unit rate value (with tolerance for floating point)
+                    if (Math.abs(coeff - unitRate.numericValue) < 0.0001) {
+                        pairs.push({ first: equation, second: unitRate });
+                        usedIndices.add(equation.index);
+                        usedIndices.add(unitRate.index);
+                        this.log('found equation-unitRate pair:', equation.rawValue, '(coeff:', coeff, ') ↔', unitRate.rawValue, '(value:', unitRate.numericValue, ')');
+                        break;
+                    }
+                }
+            }
+            this.log('matchEquationsToUnitRates: found', pairs.length, 'pairs');
         }
         matchFallback(tokens, pairs, usedIndices) {
             const fallbackTokens = tokens.filter(t => !t.isRoundingTarget);
@@ -4621,8 +4759,15 @@ var AutoDuo = (function (exports) {
                         }
                     }
                 }
-                // Equation with variable like "16-3=X" or "X=16-3"
+                // Equation with variable like "16-3=X", "X=16-3", or "12+X=26"
                 if (text.includes('=') && /[XYZ]/.test(text)) {
+                    // First try solveEquationWithBlank which handles all cases including X in the middle
+                    const result = solveEquationWithBlank(text);
+                    if (result !== null) {
+                        this.log('solved equation with solveEquationWithBlank:', text, '→', result);
+                        return { value: result, equation: text };
+                    }
+                    // Fallback: Try simple patterns for cases solveEquationWithBlank might miss
                     // Clean the text
                     const cleanText = text
                         .replace(/\\mathbf\{([^}]+)\}/g, '$1')
@@ -5493,41 +5638,127 @@ var AutoDuo = (function (exports) {
                 const iframeWindow = iframe.contentWindow;
                 if (!iframeWindow)
                     return;
-                // IMPORTANT: Set exprBuild.entries directly with token values (not indices)
-                // The component's update subscriber will then populate filled_entry_indices
-                if (iframeWindow.exprBuild && iframeWindow.tokens) {
-                    const tokens = iframeWindow.tokens;
+                // Get tokens - try multiple methods
+                let tokens = null;
+                let exprBuild = null;
+                // Method 1: Try direct window access
+                if (iframeWindow.tokens && iframeWindow.exprBuild) {
+                    tokens = iframeWindow.tokens;
+                    exprBuild = iframeWindow.exprBuild;
+                    this.logDebug('accessed exprBuild and tokens from window directly');
+                }
+                // Method 2: Try window.mathDiagram (fallback)
+                if ((!tokens || !exprBuild) && iframeWindow.mathDiagram) {
+                    const mathDiagram = iframeWindow.mathDiagram;
+                    if (mathDiagram.tokens && mathDiagram.exprBuild) {
+                        tokens = mathDiagram.tokens;
+                        exprBuild = mathDiagram.exprBuild;
+                        this.logDebug('accessed exprBuild and tokens from window.mathDiagram');
+                    }
+                }
+                // Method 3: Use eval to access from script scope
+                if ((!tokens || !exprBuild) && iframeWindow.eval) {
+                    try {
+                        // Get tokens via eval
+                        const tokensEval = iframeWindow.eval(`
+                        (function() {
+                            if (typeof tokens !== 'undefined') {
+                                return tokens;
+                            }
+                            return null;
+                        })()
+                    `);
+                        if (tokensEval) {
+                            tokens = tokensEval;
+                            this.logDebug('accessed tokens via eval');
+                        }
+                        // Try to get exprBuild reference via eval
+                        // Note: We can't directly return exprBuild object reference, so we'll set it via eval
+                        const hasExprBuild = iframeWindow.eval(`
+                        (function() {
+                            return typeof exprBuild !== 'undefined' && exprBuild !== null;
+                        })()
+                    `);
+                        if (hasExprBuild && tokens) {
+                            // Set entries directly via eval in iframe scope using solution indices
+                            // We can't JSON.stringify because tokens might contain DOM elements
+                            // Instead, we'll set entries by directly accessing tokens array in iframe scope
+                            const solutionIndicesStr = JSON.stringify(solution);
+                            const success = iframeWindow.eval(`
+                            (function() {
+                                if (typeof exprBuild !== 'undefined' && typeof tokens !== 'undefined' && exprBuild.entries) {
+                                    const solutionIndices = ${solutionIndicesStr};
+                                    for (let i = 0; i < solutionIndices.length && i < exprBuild.entries.length; i++) {
+                                        const tokenIdx = solutionIndices[i];
+                                        if (tokenIdx >= 0 && tokenIdx < tokens.length) {
+                                            exprBuild.entries[i] = tokens[tokenIdx];
+                                        } else {
+                                            exprBuild.entries[i] = null;
+                                        }
+                                    }
+                                    if (typeof exprBuild.notifyUpdateSubscribers === 'function') {
+                                        exprBuild.notifyUpdateSubscribers();
+                                    }
+                                    return true;
+                                }
+                                return false;
+                            })()
+                        `);
+                            if (success) {
+                                this.log('set exprBuild.entries via eval using indices:', solution);
+                                // Trigger callbacks
+                                if (typeof iframeWindow.postOutputVariables === 'function') {
+                                    iframeWindow.postOutputVariables();
+                                }
+                                if (iframeWindow.duo?.onFirstInteraction) {
+                                    iframeWindow.duo.onFirstInteraction();
+                                }
+                                if (iframeWindow.duoDynamic?.onInteraction) {
+                                    iframeWindow.duoDynamic.onInteraction();
+                                }
+                                return; // Successfully set via eval
+                            }
+                        }
+                    }
+                    catch (evalError) {
+                        this.logDebug('eval failed:', evalError);
+                    }
+                }
+                // If we have direct references, use them
+                if (tokens && exprBuild) {
+                    // IMPORTANT: Set exprBuild.entries directly with token values (not indices)
+                    // The component's update subscriber will then populate filled_entry_indices
                     const entries = solution.map((idx) => {
                         const token = tokens[idx];
                         return token !== undefined ? token : null;
                     });
                     // Set entries array
-                    if (Array.isArray(iframeWindow.exprBuild.entries)) {
-                        for (let i = 0; i < entries.length && i < iframeWindow.exprBuild.entries.length; i++) {
-                            iframeWindow.exprBuild.entries[i] = entries[i];
+                    if (Array.isArray(exprBuild.entries)) {
+                        for (let i = 0; i < entries.length && i < exprBuild.entries.length; i++) {
+                            exprBuild.entries[i] = entries[i];
                         }
                         this.log('set exprBuild.entries:', entries);
                         // Notify the component of changes
-                        if (typeof iframeWindow.exprBuild.notifyUpdateSubscribers === 'function') {
-                            iframeWindow.exprBuild.notifyUpdateSubscribers();
+                        if (typeof exprBuild.notifyUpdateSubscribers === 'function') {
+                            exprBuild.notifyUpdateSubscribers();
                         }
                     }
                     else {
                         this.logError('exprBuild.entries is not an array');
                     }
+                    // Trigger callbacks
+                    if (typeof iframeWindow.postOutputVariables === 'function') {
+                        iframeWindow.postOutputVariables();
+                    }
+                    if (iframeWindow.duo?.onFirstInteraction) {
+                        iframeWindow.duo.onFirstInteraction();
+                    }
+                    if (iframeWindow.duoDynamic?.onInteraction) {
+                        iframeWindow.duoDynamic.onInteraction();
+                    }
                 }
                 else {
                     this.logError('exprBuild or tokens not found in iframe');
-                }
-                // Trigger callbacks
-                if (typeof iframeWindow.postOutputVariables === 'function') {
-                    iframeWindow.postOutputVariables();
-                }
-                if (iframeWindow.duo?.onFirstInteraction) {
-                    iframeWindow.duo.onFirstInteraction();
-                }
-                if (iframeWindow.duoDynamic?.onInteraction) {
-                    iframeWindow.duoDynamic.onInteraction();
                 }
             }
             catch (e) {
@@ -6794,7 +7025,7 @@ var AutoDuo = (function (exports) {
      * @param equation - уравнение в формате LaTeX или текста
      * @returns объект с коэффициентом m и константой b, или null
      */
-    function parseLinearEquation(equation) {
+    function parseLinearEquation$3(equation) {
         // Clean LaTeX
         let cleaned = cleanLatexWrappers(equation);
         cleaned = convertLatexOperators(cleaned);
@@ -6821,6 +7052,41 @@ var AutoDuo = (function (exports) {
             }
         }
         return null;
+    }
+    /**
+     * Вычисляет линейное уравнение y = mx + b из массива точек методом наименьших квадратов
+     * @param xValues - массив значений x
+     * @param yValues - массив значений y
+     * @returns объект с коэффициентом m и константой b, или null
+     */
+    function calculateLinearRegression(xValues, yValues) {
+        if (xValues.length !== yValues.length || xValues.length < 2) {
+            return null;
+        }
+        const n = xValues.length;
+        // Вычисляем средние значения
+        const xMean = xValues.reduce((sum, x) => sum + x, 0) / n;
+        const yMean = yValues.reduce((sum, y) => sum + y, 0) / n;
+        // Вычисляем коэффициенты методом наименьших квадратов
+        let numerator = 0; // Σ((x - x̄)(y - ȳ))
+        let denominator = 0; // Σ((x - x̄)²)
+        for (let i = 0; i < n; i++) {
+            const x = xValues[i];
+            const y = yValues[i];
+            if (x === undefined || y === undefined)
+                continue;
+            const xDiff = x - xMean;
+            const yDiff = y - yMean;
+            numerator += xDiff * yDiff;
+            denominator += xDiff * xDiff;
+        }
+        // Если знаменатель равен нулю, все x одинаковы (вертикальная линия)
+        if (Math.abs(denominator) < 1e-10) {
+            return null;
+        }
+        const m = numerator / denominator;
+        const b = yMean - m * xMean;
+        return { m, b };
     }
     class TableFillSolver extends BaseSolver {
         name = 'TableFillSolver';
@@ -6860,18 +7126,6 @@ var AutoDuo = (function (exports) {
             if (!tableIframe) {
                 return this.failure('tableFill', 'No table iframe found');
             }
-            // Extract equation from KaTeX annotations
-            const equation = this.extractEquation(context);
-            if (!equation) {
-                return this.failure('tableFill', 'Could not extract equation');
-            }
-            this.log('extracted equation:', equation);
-            // Parse the equation
-            const parsed = parseLinearEquation(equation);
-            if (!parsed) {
-                return this.failure('tableFill', `Could not parse equation: ${equation}`);
-            }
-            this.log('parsed equation: y =', parsed.m, 'x +', parsed.b);
             // Access iframe window
             const iframeWindow = tableIframe.contentWindow;
             if (!iframeWindow) {
@@ -6879,10 +7133,8 @@ var AutoDuo = (function (exports) {
             }
             // Try to access INPUT_VARIABLES from srcdoc first (more reliable)
             const srcdoc = tableIframe.getAttribute('srcdoc') || '';
-            let data = null;
-            let tokens = null;
+            let inputVarsParsed = null;
             // Extract INPUT_VARIABLES from srcdoc
-            // Format: const INPUT_VARIABLES = {"data": [[-4, null], ...], "tokens": [-8, -4, ...]};
             const inputVarsMatch = srcdoc.match(/INPUT_VARIABLES\s*=\s*(\{[^;]+\})/);
             if (inputVarsMatch && inputVarsMatch[1] !== undefined) {
                 try {
@@ -6890,35 +7142,140 @@ var AutoDuo = (function (exports) {
                     if (!jsonStr) {
                         throw new Error('Empty JSON string');
                     }
-                    const parsedVars = JSON.parse(jsonStr);
-                    if (parsedVars.data && parsedVars.tokens) {
-                        data = parsedVars.data;
-                        tokens = parsedVars.tokens;
-                        this.log('extracted data from srcdoc:', data, tokens);
-                    }
+                    inputVarsParsed = JSON.parse(jsonStr);
+                    this.log('extracted INPUT_VARIABLES from srcdoc:', inputVarsParsed);
                 }
                 catch {
                     this.logDebug('could not parse INPUT_VARIABLES from srcdoc, trying iframe window');
                 }
             }
             // Fallback: try to get from iframe window
-            if (!data || !tokens) {
-                const inputVars = iframeWindow.INPUT_VARIABLES;
-                const diagram = iframeWindow.diagram;
-                data = inputVars?.data || diagram?.variables?.data || null;
-                tokens = inputVars?.tokens || diagram?.variables?.tokens || null;
+            if (!inputVarsParsed) {
+                inputVarsParsed = iframeWindow.INPUT_VARIABLES || iframeWindow.diagram?.variables || null;
             }
+            if (!inputVarsParsed) {
+                return this.failure('tableFill', 'Could not access INPUT_VARIABLES');
+            }
+            // Check if this is a "Select the match" challenge (has x_values/y_values and multiple-choice options)
+            const hasXValues = !!(inputVarsParsed.x_values && inputVarsParsed.y_values);
+            const hasMultipleChoice = context.container.querySelectorAll(SELECTORS.CHALLENGE_CHOICE).length > 0;
+            if (hasXValues && hasMultipleChoice) {
+                // New type: "Select the match" - calculate equation from points and select multiple-choice option
+                return this.solveTableMatch(context, tableIframe, iframeWindow, inputVarsParsed);
+            }
+            else if (inputVarsParsed.data && inputVarsParsed.tokens) {
+                // Old type: Fill table cells with tokens
+                return this.solveTableFill(context, tableIframe, iframeWindow, inputVarsParsed);
+            }
+            else {
+                return this.failure('tableFill', 'Could not access table data or tokens (neither x_values/y_values nor data/tokens found)');
+            }
+        }
+        /**
+         * Решает задание типа "Select the match": вычисляет уравнение из точек и выбирает правильный вариант
+         */
+        solveTableMatch(context, tableIframe, iframeWindow, inputVars) {
+            this.log('solving "Select the match" challenge');
+            const xValues = inputVars.x_values;
+            const yValues = inputVars.y_values;
+            if (!xValues || !yValues || xValues.length !== yValues.length || xValues.length < 2) {
+                return this.failure('tableMatch', 'Invalid x_values or y_values');
+            }
+            this.log('x_values:', xValues);
+            this.log('y_values:', yValues);
+            // Calculate linear equation from points
+            const regression = calculateLinearRegression(xValues, yValues);
+            if (!regression) {
+                return this.failure('tableMatch', 'Could not calculate linear regression');
+            }
+            // Round to reasonable precision (avoid floating point errors)
+            const m = Math.round(regression.m * 1000) / 1000;
+            const b = Math.round(regression.b * 1000) / 1000;
+            this.log(`calculated equation: y = ${m}x + ${b}`);
+            // Find multiple-choice options
+            const choices = context.container.querySelectorAll(SELECTORS.CHALLENGE_CHOICE);
+            if (choices.length === 0) {
+                return this.failure('tableMatch', 'No multiple-choice options found');
+            }
+            this.log(`found ${choices.length} choices`);
+            // Find the matching choice
+            let selectedIndex = -1;
+            for (let i = 0; i < choices.length; i++) {
+                const choice = choices[i];
+                if (!choice)
+                    continue;
+                // Extract equation from choice (KaTeX)
+                const choiceEquation = extractKatexValue(choice);
+                if (!choiceEquation) {
+                    this.logDebug(`choice ${i}: could not extract equation`);
+                    continue;
+                }
+                this.log(`choice ${i}: ${choiceEquation}`);
+                // Parse the equation
+                const parsed = parseLinearEquation$3(choiceEquation);
+                if (!parsed) {
+                    this.logDebug(`choice ${i}: could not parse equation`);
+                    continue;
+                }
+                // Round to same precision
+                const choiceM = Math.round(parsed.m * 1000) / 1000;
+                const choiceB = Math.round(parsed.b * 1000) / 1000;
+                this.log(`choice ${i}: parsed as y = ${choiceM}x + ${choiceB}`);
+                // Check if it matches (with tolerance for floating point errors)
+                if (Math.abs(choiceM - m) < 0.001 && Math.abs(choiceB - b) < 0.001) {
+                    this.log(`found matching choice: ${i}`);
+                    selectedIndex = i;
+                    break;
+                }
+            }
+            if (selectedIndex === -1) {
+                return this.failure('tableMatch', `Could not find matching choice for equation y = ${m}x + ${b}`);
+            }
+            // Click the matching choice
+            const choice = choices[selectedIndex];
+            if (choice) {
+                this.log(`clicking choice ${selectedIndex}`);
+                this.click(choice);
+            }
+            // Format equation string
+            let equation;
+            if (Math.abs(b) < 0.001) {
+                // b is effectively 0
+                equation = `y = ${m}x`;
+            }
+            else {
+                equation = `y = ${m}x${b >= 0 ? ' + ' : ' - '}${Math.abs(b)}`;
+            }
+            return this.success({
+                type: 'tableMatch',
+                equation,
+                selectedChoice: selectedIndex,
+            });
+        }
+        /**
+         * Решает задание типа "Fill the table": заполняет ячейки таблицы значениями из токенов
+         */
+        solveTableFill(context, tableIframe, iframeWindow, inputVars) {
+            this.log('solving "Fill the table" challenge');
+            // Extract equation from KaTeX annotations
+            const equation = this.extractEquation(context);
+            if (!equation) {
+                return this.failure('tableFill', 'Could not extract equation');
+            }
+            this.log('extracted equation:', equation);
+            // Parse the equation
+            const parsed = parseLinearEquation$3(equation);
+            if (!parsed) {
+                return this.failure('tableFill', `Could not parse equation: ${equation}`);
+            }
+            this.log('parsed equation: y =', parsed.m, 'x +', parsed.b);
+            const data = inputVars.data;
+            const tokens = inputVars.tokens;
             if (!data || !tokens) {
                 return this.failure('tableFill', 'Could not access table data or tokens');
             }
-            // Try to get table from diagram.table or window.diagram.table
-            // According to transcript, table is stored at window.diagram.table
-            let table = iframeWindow.diagram?.table;
-            if (!table) {
-                // Fallback: try accessing via window property directly
-                const windowWithDiagram = iframeWindow;
-                table = windowWithDiagram.diagram?.table;
-            }
+            // Wait for table to be initialized (it's created in DOMContentLoaded)
+            const table = this.waitForTable(iframeWindow);
             if (!table || !table.setCellValue) {
                 return this.failure('tableFill', 'Could not access table.setCellValue. Table may not be initialized yet.');
             }
@@ -6933,7 +7290,7 @@ var AutoDuo = (function (exports) {
                     continue;
                 const x = row[0];
                 const y = row[1];
-                // If y is null, calculate it
+                // If y is null, calculate it from x
                 if (x !== null && x !== undefined && y === null) {
                     const calculatedY = parsed.m * x + parsed.b;
                     this.log(`row ${rowIndex}: x = ${x}, calculated y = ${calculatedY}`);
@@ -6963,18 +7320,56 @@ var AutoDuo = (function (exports) {
                         this.logError('error setting cell value:', e);
                     }
                 }
+                // If x is null, calculate it from y
+                else if (y !== null && y !== undefined && x === null) {
+                    // Solve for x: y = mx + b => x = (y - b) / m
+                    if (Math.abs(parsed.m) < 0.001) {
+                        this.logError(`row ${rowIndex}: cannot solve for x when m is 0 (y = ${y})`);
+                        continue;
+                    }
+                    const calculatedX = (y - parsed.b) / parsed.m;
+                    this.log(`row ${rowIndex}: y = ${y}, calculated x = ${calculatedX}`);
+                    // Find the token element that matches calculatedX
+                    const tokenValue = tokens.find((t) => Math.abs(t - calculatedX) < 0.001);
+                    if (tokenValue === undefined) {
+                        this.logError(`could not find token for value ${calculatedX}`);
+                        continue;
+                    }
+                    // Set the cell value (column 0 is x)
+                    const renderedValue = renderNumber(tokenValue);
+                    try {
+                        // Try to find token element (might be required for drag-and-drop)
+                        const tokenElement = this.findTokenElement(iframeWindow, tokenValue);
+                        // Try with token element first, then without
+                        if (tokenElement) {
+                            table.setCellValue(rowIndex, 0, renderedValue, tokenElement);
+                        }
+                        else {
+                            // Try without token element (might work for direct value setting)
+                            table.setCellValue(rowIndex, 0, renderedValue);
+                        }
+                        filledCells++;
+                        this.log(`filled cell [${rowIndex}, 0] with value ${renderedValue}`);
+                    }
+                    catch (e) {
+                        this.logError('error setting cell value:', e);
+                    }
+                }
             }
             if (filledCells === 0) {
                 return this.failure('tableFill', 'No cells were filled');
             }
-            // Trigger update callbacks
+            // Add a small delay to allow table component to process changes
+            this.syncDelay(100);
+            // Trigger update callbacks with comprehensive event dispatching
             this.triggerUpdateCallbacks(iframeWindow);
-            return {
+            // Add another delay after triggering callbacks to give Duolingo time to validate
+            this.syncDelay(200);
+            return this.success({
                 type: 'tableFill',
-                success: true,
                 equation,
                 filledCells,
-            };
+            });
         }
         extractEquation(context) {
             // Look for equation in KaTeX annotations
@@ -7033,19 +7428,2110 @@ var AutoDuo = (function (exports) {
             }
             return null;
         }
+        /**
+         * Ожидает инициализации таблицы в iframe
+         * Использует синхронный опрос с ограничением по времени
+         * ВАЖНО: Использует busy-wait, который блокирует поток, но ограничен коротким временем
+         */
+        waitForTable(iframeWindow) {
+            const maxAttempts = 100; // Увеличено количество попыток
+            const delayMs = 20; // Увеличена задержка между попытками (максимум 2 секунды)
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                try {
+                    // First, check if iframe document is ready
+                    const iframeDoc = iframeWindow.document;
+                    if (!iframeDoc || iframeDoc.readyState === 'loading') {
+                        // Document not ready yet, continue waiting
+                        if (attempt % 10 === 0) {
+                            this.logDebug(`attempt ${attempt + 1}: iframe document not ready`);
+                        }
+                    }
+                    else {
+                        let table = null;
+                        // Path 1 (PRIMARY): window.mathDiagram - Table instance is assigned here in srcdoc
+                        if (iframeWindow.mathDiagram && typeof iframeWindow.mathDiagram.setCellValue === 'function') {
+                            table = iframeWindow.mathDiagram;
+                            this.log('found table at window.mathDiagram');
+                            if (attempt > 0) {
+                                this.log(`table initialized after ${attempt} attempts (${attempt * delayMs}ms)`);
+                            }
+                            return table;
+                        }
+                        // Path 2 (SECONDARY): diagram.table
+                        table = iframeWindow.diagram?.table || null;
+                        if (table && typeof table.setCellValue === 'function') {
+                            this.log('found table at diagram.table');
+                            if (attempt > 0) {
+                                this.log(`table initialized after ${attempt} attempts (${attempt * delayMs}ms)`);
+                            }
+                            return table;
+                        }
+                        // Path 3 (TERTIARY): Try accessing via window property directly (fallback)
+                        if (!table) {
+                            const windowWithDiagram = iframeWindow;
+                            table = windowWithDiagram.diagram?.table || null;
+                            if (table && typeof table.setCellValue === 'function') {
+                                this.log('found table at diagram.table (via fallback)');
+                                if (attempt > 0) {
+                                    this.log(`table initialized after ${attempt} attempts (${attempt * delayMs}ms)`);
+                                }
+                                return table;
+                            }
+                        }
+                        // Path 4 (GENERIC FALLBACK): Try to find table instance from diagram properties
+                        if (!table && iframeWindow.diagram) {
+                            const diagramAny = iframeWindow.diagram;
+                            for (const key in diagramAny) {
+                                const value = diagramAny[key];
+                                if (value &&
+                                    typeof value === 'object' &&
+                                    'setCellValue' in value &&
+                                    typeof value.setCellValue === 'function') {
+                                    table = value;
+                                    this.log(`found table at diagram.${key}`);
+                                    if (attempt > 0) {
+                                        this.log(`table initialized after ${attempt} attempts (${attempt * delayMs}ms)`);
+                                    }
+                                    return table;
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (e) {
+                    // Ignore errors during polling (cross-origin restrictions, etc.)
+                    if (attempt % 10 === 0) {
+                        // Log every 10th attempt to avoid spam
+                        this.logDebug(`attempt ${attempt + 1}: table not ready yet (${e})`);
+                    }
+                }
+            }
+            this.logError(`table not initialized after ${maxAttempts} attempts (${maxAttempts * delayMs}ms)`);
+            return null;
+        }
         triggerUpdateCallbacks(iframeWindow) {
             try {
-                // Trigger any update callbacks that might be needed
-                if (iframeWindow.diagram?.table) {
-                    // The table's addUpdateSubscriber should handle updates automatically
-                    // but we can trigger a manual update if needed
-                    const event = new Event('input', { bubbles: true });
-                    iframeWindow.document.dispatchEvent(event);
+                const iframeDoc = iframeWindow.document;
+                if (!iframeDoc)
+                    return;
+                // Check both mathDiagram (primary) and diagram.table (fallback)
+                const table = iframeWindow.mathDiagram || iframeWindow.diagram?.table;
+                if (!table)
+                    return;
+                this.log('triggering update callbacks');
+                // Try to call table's validation/update methods if they exist
+                const tableAny = table;
+                if (typeof tableAny.validate === 'function') {
+                    try {
+                        tableAny.validate();
+                        this.log('called table.validate()');
+                    }
+                    catch (e) {
+                        this.logDebug('table.validate() not available or failed:', e);
+                    }
                 }
+                if (typeof tableAny.notifyUpdate === 'function') {
+                    try {
+                        tableAny.notifyUpdate();
+                        this.log('called table.notifyUpdate()');
+                    }
+                    catch (e) {
+                        this.logDebug('table.notifyUpdate() not available or failed:', e);
+                    }
+                }
+                if (typeof tableAny.notifyUpdateSubscribers === 'function') {
+                    try {
+                        tableAny.notifyUpdateSubscribers();
+                        this.log('called table.notifyUpdateSubscribers()');
+                    }
+                    catch (e) {
+                        this.logDebug('table.notifyUpdateSubscribers() not available or failed:', e);
+                    }
+                }
+                // Find table cells in the DOM and dispatch events on them
+                const tableCells = iframeDoc.querySelectorAll('td, [role="gridcell"], [class*="cell"]');
+                if (tableCells.length > 0) {
+                    this.log(`found ${tableCells.length} table cells, dispatching events`);
+                    tableCells.forEach((cell) => {
+                        // Dispatch input event
+                        cell.dispatchEvent(new Event('input', { bubbles: true }));
+                        // Dispatch change event
+                        cell.dispatchEvent(new Event('change', { bubbles: true }));
+                        // Dispatch blur event (simulates user finishing input)
+                        cell.dispatchEvent(new Event('blur', { bubbles: true }));
+                    });
+                }
+                // Dispatch comprehensive events on document
+                const events = ['input', 'change', 'blur', 'focusout'];
+                events.forEach((eventType) => {
+                    const event = new Event(eventType, { bubbles: true });
+                    iframeDoc.dispatchEvent(event);
+                });
+                // Dispatch custom events that might be expected
+                const customEvents = ['tableUpdate', 'diagramUpdate', 'cellUpdate', 'valueChange'];
+                customEvents.forEach((eventType) => {
+                    const event = new CustomEvent(eventType, { bubbles: true });
+                    iframeDoc.dispatchEvent(event);
+                    iframeWindow.dispatchEvent(event);
+                });
+                // Call Duolingo's internal callbacks to notify parent frame
+                // These are critical for enabling the "Continue" button
+                if (typeof iframeWindow.postOutputVariables === 'function') {
+                    try {
+                        iframeWindow.postOutputVariables();
+                        this.log('called postOutputVariables()');
+                    }
+                    catch (e) {
+                        this.logDebug('postOutputVariables() failed:', e);
+                    }
+                }
+                if (iframeWindow.duo?.onFirstInteraction) {
+                    try {
+                        iframeWindow.duo.onFirstInteraction();
+                        this.log('called duo.onFirstInteraction()');
+                    }
+                    catch (e) {
+                        this.logDebug('duo.onFirstInteraction() failed:', e);
+                    }
+                }
+                if (iframeWindow.duoDynamic?.onInteraction) {
+                    try {
+                        iframeWindow.duoDynamic.onInteraction();
+                        this.log('called duoDynamic.onInteraction()');
+                    }
+                    catch (e) {
+                        this.logDebug('duoDynamic.onInteraction() failed:', e);
+                    }
+                }
+                this.log('dispatched all update events and called Duolingo callbacks');
             }
             catch (e) {
                 this.logError('error triggering update callbacks:', e);
             }
+        }
+        /**
+         * Synchronous delay using busy-wait (for use in synchronous solve method)
+         */
+        syncDelay(ms) {
+        }
+    }
+
+    /**
+     * Солвер для построения точек на графике
+     * Работает с Grid2D и DraggablePoint компонентами в iframe
+     * Примеры:
+     * - Plot the points (2, 2) and (4, 4) - явные координаты
+     * - Plot the points on y = 7x - уравнение
+     */
+    /**
+     * Извлекает координаты точек из текста задания
+     * Примеры: "Plot the points (2, 2) and (4, 4)" или "Plot the points (1, 3), (2, 6)"
+     * Удаляет дубликаты точек с одинаковыми координатами
+     */
+    function extractPointsFromText(text) {
+        const points = [];
+        const seenPoints = new Set();
+        // Pattern для поиска координат: (число, число)
+        // Поддерживает различные форматы: (2, 2), (-3, 4), (1.5, 2.5)
+        const pointPattern = /\((-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\)/g;
+        let match;
+        while ((match = pointPattern.exec(text)) !== null) {
+            if (match[1] !== undefined && match[2] !== undefined) {
+                const x = parseFloat(match[1]);
+                const y = parseFloat(match[2]);
+                if (!Number.isNaN(x) && !Number.isNaN(y)) {
+                    // Create a unique key for this point to detect duplicates
+                    const pointKey = `${x},${y}`;
+                    if (!seenPoints.has(pointKey)) {
+                        seenPoints.add(pointKey);
+                        points.push({ x, y });
+                    }
+                }
+            }
+        }
+        return points;
+    }
+    /**
+     * Парсит линейное уравнение вида y = mx или y = mx + b
+     * Поддерживает дробные коэффициенты: y = (5/3)x, y = \frac{2}{3}x
+     * @param equation - уравнение в формате LaTeX или текста
+     * @returns объект с коэффициентом m и константой b, или null
+     */
+    function parseLinearEquation$2(equation) {
+        // Clean LaTeX
+        let cleaned = cleanLatexWrappers(equation);
+        cleaned = convertLatexOperators(cleaned);
+        cleaned = convertLatexFractions(cleaned); // Convert \frac{a}{b} to (a/b)
+        cleaned = cleaned.replace(/\s+/g, '');
+        // Pattern 1: y = mx (simple number coefficient)
+        // Pattern: y = (number)x or y = -(number)x
+        let match = cleaned.match(/^y=(-?\d+\.?\d*)x$/);
+        if (match && match[1] !== undefined) {
+            const m = parseFloat(match[1]);
+            if (!Number.isNaN(m)) {
+                return { m, b: 0 };
+            }
+        }
+        // Pattern 2: y = (expression)x where expression can be evaluated (e.g., y=(5/3)x, y=(2/3)x)
+        match = cleaned.match(/^y=(.+?)x$/);
+        if (match && match[1] !== undefined) {
+            const coefficientExpr = match[1];
+            // Remove outer parentheses if present, e.g., (5/3) -> 5/3
+            const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+            const evaluated = evaluateMathExpression(cleanedCoeff);
+            if (evaluated !== null) {
+                return { m: evaluated, b: 0 };
+            }
+        }
+        // Pattern 3: y = mx + b or y = mx - b (simple number coefficient)
+        match = cleaned.match(/^y=(-?\d+\.?\d*)x\+(-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined && match[2] !== undefined) {
+            const m = parseFloat(match[1]);
+            const b = parseFloat(match[2]);
+            if (!Number.isNaN(m) && !Number.isNaN(b)) {
+                return { m, b };
+            }
+        }
+        match = cleaned.match(/^y=(-?\d+\.?\d*)x-(-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined && match[2] !== undefined) {
+            const m = parseFloat(match[1]);
+            const b = -parseFloat(match[2]);
+            if (!Number.isNaN(m) && !Number.isNaN(b)) {
+                return { m, b };
+            }
+        }
+        // Pattern 4: y = (expression)x + b or y = (expression)x - b (fractional coefficient)
+        match = cleaned.match(/^y=(.+?)x\+(-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined && match[2] !== undefined) {
+            const coefficientExpr = match[1];
+            const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+            const evaluated = evaluateMathExpression(cleanedCoeff);
+            const b = parseFloat(match[2]);
+            if (evaluated !== null && !Number.isNaN(b)) {
+                return { m: evaluated, b };
+            }
+        }
+        match = cleaned.match(/^y=(.+?)x-(-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined && match[2] !== undefined) {
+            const coefficientExpr = match[1];
+            const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+            const evaluated = evaluateMathExpression(cleanedCoeff);
+            const b = -parseFloat(match[2]);
+            if (evaluated !== null && !Number.isNaN(b)) {
+                return { m: evaluated, b };
+            }
+        }
+        return null;
+    }
+    /**
+     * Извлекает уравнение из текста задания
+     * Ищет уравнения вида y = mx или y = mx + b в KaTeX элементах
+     */
+    function extractEquationFromText(context) {
+        // Look for equation in KaTeX annotations
+        const annotations = context.container.querySelectorAll('annotation');
+        for (const annotation of annotations) {
+            const text = annotation.textContent;
+            if (!text)
+                continue;
+            // Check if it looks like an equation (y = ...)
+            if (text.includes('y') && text.includes('=') && text.includes('x')) {
+                const katexValue = extractKatexValue(annotation.parentElement);
+                if (katexValue) {
+                    return katexValue;
+                }
+            }
+        }
+        // Also check equation container
+        if (context.equationContainer) {
+            const katexValue = extractKatexValue(context.equationContainer);
+            if (katexValue && katexValue.includes('y') && katexValue.includes('=') && katexValue.includes('x')) {
+                return katexValue;
+            }
+        }
+        // Fallback: search in all text content
+        const containerText = context.container.textContent || '';
+        const headerText = context.container.querySelector('[data-test="challenge-header"]')?.textContent || '';
+        const fullText = `${headerText} ${containerText}`;
+        // Try to find equation pattern in plain text
+        const equationPattern = /y\s*=\s*(-?\d+\.?\d*)\s*x\s*([+-]?\s*\d+\.?\d*)?/i;
+        const match = fullText.match(equationPattern);
+        if (match) {
+            let equation = `y=${match[1]}x`;
+            if (match[2]) {
+                const bValue = match[2].replace(/\s+/g, '');
+                equation += bValue;
+            }
+            return equation;
+        }
+        return null;
+    }
+    /**
+     * Вычисляет точки на прямой по уравнению
+     * @param m - коэффициент наклона
+     * @param b - константа
+     * @param numPoints - количество точек для построения
+     * @returns массив точек
+     */
+    function calculatePointsFromEquation(m, b, numPoints = 2) {
+        const points = [];
+        // Используем значения x от 1 до numPoints для простоты
+        // Можно было бы использовать более умную логику, но для начала это работает
+        for (let i = 0; i < numPoints; i++) {
+            const x = i + 1;
+            const y = m * x + b;
+            points.push({ x, y });
+        }
+        return points;
+    }
+    class PlotPointsSolver extends BaseSolver {
+        name = 'PlotPointsSolver';
+        canSolve(context) {
+            // Check for iframe with Grid2D and draggable points
+            const allIframes = findAllIframes(context.container);
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            for (const iframe of combinedIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    continue;
+                // Check for Grid2D and addDraggablePoint
+                if ((srcdoc.includes('new Grid2D') || srcdoc.includes('Grid2D({')) &&
+                    srcdoc.includes('addDraggablePoint')) {
+                    this.log('found Grid2D with draggable points in iframe');
+                    return true;
+                }
+            }
+            return false;
+        }
+        solve(context) {
+            this.log('starting');
+            // Find the diagram iframe
+            const allIframes = findAllIframes(context.container);
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            let diagramIframe = null;
+            for (const iframe of combinedIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    continue;
+                if ((srcdoc.includes('new Grid2D') || srcdoc.includes('Grid2D({')) &&
+                    srcdoc.includes('addDraggablePoint')) {
+                    diagramIframe = iframe;
+                    break;
+                }
+            }
+            if (!diagramIframe) {
+                return this.failure('plotPoints', 'No Grid2D iframe found');
+            }
+            // Access iframe window
+            const iframeWindow = diagramIframe.contentWindow;
+            if (!iframeWindow) {
+                return this.failure('plotPoints', 'Could not access iframe window');
+            }
+            // Extract target points from challenge text
+            const headerText = this.getHeaderText(context);
+            const containerText = context.container.textContent || '';
+            const fullText = `${headerText} ${containerText}`;
+            this.log('extracting points from text:', fullText.substring(0, 200));
+            // Try to determine number of points from srcdoc or INPUT_VARIABLES
+            const srcdoc = diagramIframe.getAttribute('srcdoc') || '';
+            let numPoints = iframeWindow.INPUT_VARIABLES?.numPoints;
+            // Try to extract numPoints from srcdoc if not in INPUT_VARIABLES
+            if (numPoints === undefined) {
+                const inputVarsMatch = srcdoc.match(/INPUT_VARIABLES\s*=\s*(\{[^;]+\})/);
+                if (inputVarsMatch && inputVarsMatch[1]) {
+                    try {
+                        const parsedVars = JSON.parse(inputVarsMatch[1]);
+                        if (typeof parsedVars.numPoints === 'number') {
+                            numPoints = parsedVars.numPoints;
+                        }
+                    }
+                    catch {
+                        // Ignore parse errors
+                    }
+                }
+            }
+            // Count addDraggablePoint calls in srcdoc as fallback
+            if (numPoints === undefined) {
+                const draggablePointMatches = srcdoc.match(/addDraggablePoint/g);
+                if (draggablePointMatches) {
+                    numPoints = draggablePointMatches.length;
+                }
+            }
+            // Default to 2 if we still don't know
+            if (numPoints === undefined) {
+                numPoints = 2;
+            }
+            this.log(`detected ${numPoints} draggable points`);
+            // First, try to extract explicit coordinates
+            let targetPoints = extractPointsFromText(fullText);
+            // If no explicit coordinates found, try to extract equation
+            if (targetPoints.length === 0) {
+                this.log('no explicit coordinates found, trying to extract equation');
+                const equation = extractEquationFromText(context);
+                if (equation) {
+                    this.log('extracted equation:', equation);
+                    const parsed = parseLinearEquation$2(equation);
+                    if (parsed) {
+                        this.log(`parsed equation: y = ${parsed.m}x + ${parsed.b}`);
+                        this.log(`calculating ${numPoints} points from equation`);
+                        targetPoints = calculatePointsFromEquation(parsed.m, parsed.b, numPoints);
+                        this.log(`calculated ${targetPoints.length} points:`, targetPoints);
+                    }
+                    else {
+                        this.logError('could not parse equation:', equation);
+                    }
+                }
+                else {
+                    this.logError('could not extract equation from challenge text');
+                }
+            }
+            if (targetPoints.length === 0) {
+                return this.failure('plotPoints', 'Could not extract point coordinates or equation from challenge text');
+            }
+            // Limit target points to the number of draggable points available
+            if (targetPoints.length > numPoints) {
+                this.log(`limiting target points from ${targetPoints.length} to ${numPoints} (available draggable points)`);
+                targetPoints = targetPoints.slice(0, numPoints);
+            }
+            this.log(`using ${targetPoints.length} target points:`, targetPoints);
+            // Wait for diagram to initialize with retry logic
+            // The iframe's JavaScript needs time to set up mathDiagram and populate components
+            let diagram = null;
+            const maxRetries = 20;
+            let retryCount = 0;
+            while (retryCount < maxRetries && !diagram?.components) {
+                this.syncDelay(50);
+                diagram = iframeWindow.diagram || iframeWindow.grid || iframeWindow.mathDiagram || null;
+                // Check if components exist and is accessible
+                if (diagram?.components) {
+                    // Verify components is actually accessible (not just a property that exists)
+                    try {
+                        if (Array.isArray(diagram.components) ||
+                            (typeof diagram.components.getAll === 'function')) {
+                            break;
+                        }
+                    }
+                    catch {
+                        // Components property exists but might not be ready yet
+                        diagram = null;
+                    }
+                }
+                retryCount++;
+            }
+            if (retryCount > 0) {
+                this.log(`waited ${retryCount * 50}ms for diagram to initialize`);
+            }
+            // Try to access draggable points
+            let pointsMoved = 0;
+            // Method 1: Try to access via diagram.components or grid.components
+            if (diagram?.components) {
+                let componentsArray = [];
+                // Check if components is an array or has getAll() method
+                if (Array.isArray(diagram.components)) {
+                    componentsArray = diagram.components;
+                    this.log(`found ${componentsArray.length} components (array)`);
+                }
+                else if (typeof diagram.components.getAll === 'function') {
+                    componentsArray = diagram.components.getAll();
+                    this.log(`found ${componentsArray.length} components (via getAll())`);
+                }
+                // Filter for draggable points by componentType or by updatePosition method
+                const draggablePoints = componentsArray.filter((comp) => {
+                    // First try componentType (more reliable across iframe boundaries)
+                    if (comp.componentType === 'DraggablePoint') {
+                        return true;
+                    }
+                    // Fallback: check for updatePosition method
+                    return comp.updatePosition && typeof comp.updatePosition === 'function';
+                });
+                this.log(`found ${draggablePoints.length} draggable points`);
+                if (draggablePoints.length >= targetPoints.length) {
+                    try {
+                        // Move each point to its target position
+                        for (let i = 0; i < targetPoints.length && i < draggablePoints.length; i++) {
+                            const point = draggablePoints[i];
+                            const target = targetPoints[i];
+                            if (point?.updatePosition && target) {
+                                this.log(`attempting to move point ${i + 1} from (${point.x}, ${point.y}) to (${target.x}, ${target.y})`);
+                                point.updatePosition(target.x, target.y);
+                                pointsMoved++;
+                                this.log(`moved point ${i + 1} to (${target.x}, ${target.y})`);
+                            }
+                            else {
+                                this.logError(`point ${i + 1} does not have updatePosition method or target is missing`);
+                            }
+                        }
+                    }
+                    catch (e) {
+                        this.logError('error moving points via components:', e);
+                    }
+                }
+                else {
+                    this.log(`not enough draggable points found: ${draggablePoints.length} (need ${targetPoints.length})`);
+                }
+            }
+            else {
+                this.log('diagram.components not found');
+            }
+            // Method 2: Try to access via window properties directly with retry
+            if (pointsMoved === 0) {
+                try {
+                    const windowAny = iframeWindow;
+                    const possibleNames = ['diagram', 'grid', 'mathDiagram', 'graphDiagram'];
+                    // Retry accessing components for each possible diagram name
+                    for (let retry = 0; retry < 10 && pointsMoved === 0; retry++) {
+                        if (retry > 0) {
+                            this.syncDelay(50);
+                        }
+                        for (const name of possibleNames) {
+                            const possibleDiagram = windowAny[name];
+                            if (possibleDiagram?.components) {
+                                this.log(`found diagram via window.${name} (attempt ${retry + 1})`);
+                                let componentsArray = [];
+                                try {
+                                    if (Array.isArray(possibleDiagram.components)) {
+                                        componentsArray = possibleDiagram.components;
+                                    }
+                                    else if (typeof possibleDiagram.components.getAll === 'function') {
+                                        componentsArray = possibleDiagram.components.getAll();
+                                    }
+                                }
+                                catch (e) {
+                                    this.logDebug(`error accessing components via ${name}:`, e);
+                                    continue;
+                                }
+                                const draggablePoints = componentsArray.filter((comp) => {
+                                    if (comp.componentType === 'DraggablePoint') {
+                                        return true;
+                                    }
+                                    return comp.updatePosition && typeof comp.updatePosition === 'function';
+                                });
+                                this.log(`found ${draggablePoints.length} draggable points via window.${name}`);
+                                if (draggablePoints.length >= targetPoints.length) {
+                                    for (let i = 0; i < targetPoints.length && i < draggablePoints.length; i++) {
+                                        const point = draggablePoints[i];
+                                        const target = targetPoints[i];
+                                        if (point?.updatePosition && target) {
+                                            try {
+                                                point.updatePosition(target.x, target.y);
+                                                pointsMoved++;
+                                                this.log(`moved point ${i + 1} to (${target.x}, ${target.y}) via window.${name}`);
+                                            }
+                                            catch (e) {
+                                                this.logError(`error moving point ${i + 1}:`, e);
+                                            }
+                                        }
+                                    }
+                                    if (pointsMoved > 0) {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (pointsMoved > 0) {
+                            break;
+                        }
+                    }
+                }
+                catch (e) {
+                    this.logError('error accessing diagram via window properties:', e);
+                }
+            }
+            // Method 3: Try to update OUTPUT_VARIABLES directly and trigger callbacks
+            if (pointsMoved === 0) {
+                try {
+                    const outputVars = iframeWindow.OUTPUT_VARIABLES;
+                    if (outputVars) {
+                        outputVars.finalPositions = targetPoints;
+                        this.log('updated OUTPUT_VARIABLES.finalPositions directly');
+                        // Try to trigger update callbacks
+                        const event = new Event('input', { bubbles: true });
+                        iframeWindow.document.dispatchEvent(event);
+                        // Also try custom events
+                        iframeWindow.dispatchEvent(new CustomEvent('pointUpdate'));
+                        iframeWindow.dispatchEvent(new CustomEvent('diagramUpdate'));
+                        pointsMoved = targetPoints.length; // Assume success if OUTPUT_VARIABLES were updated
+                    }
+                }
+                catch (e) {
+                    this.logError('error updating OUTPUT_VARIABLES:', e);
+                }
+            }
+            if (pointsMoved === 0) {
+                return this.failure('plotPoints', 'Could not move draggable points');
+            }
+            // Add a small delay to allow component to process changes
+            this.syncDelay(100);
+            // Trigger update callbacks to notify parent frame
+            this.triggerUpdateCallbacks(iframeWindow);
+            // Add another delay after triggering callbacks
+            this.syncDelay(200);
+            return {
+                type: 'plotPoints',
+                success: true,
+                pointsPlotted: pointsMoved,
+                targetPoints,
+            };
+        }
+        triggerUpdateCallbacks(iframeWindow) {
+            try {
+                const iframeDoc = iframeWindow.document;
+                if (!iframeDoc)
+                    return;
+                this.log('triggering update callbacks');
+                // Dispatch comprehensive events on document
+                const events = ['input', 'change', 'blur', 'focusout'];
+                events.forEach((eventType) => {
+                    const event = new Event(eventType, { bubbles: true });
+                    iframeDoc.dispatchEvent(event);
+                });
+                // Dispatch custom events that might be expected
+                const customEvents = ['pointUpdate', 'diagramUpdate', 'gridUpdate', 'valueChange'];
+                customEvents.forEach((eventType) => {
+                    const event = new CustomEvent(eventType, { bubbles: true });
+                    iframeDoc.dispatchEvent(event);
+                    iframeWindow.dispatchEvent(event);
+                });
+                // Call Duolingo's internal callbacks to notify parent frame
+                // These are critical for enabling the "Continue" button
+                if (typeof iframeWindow.postOutputVariables === 'function') {
+                    try {
+                        iframeWindow.postOutputVariables();
+                        this.log('called postOutputVariables()');
+                    }
+                    catch (e) {
+                        this.logDebug('postOutputVariables() failed:', e);
+                    }
+                }
+                if (iframeWindow.duo?.onFirstInteraction) {
+                    try {
+                        iframeWindow.duo.onFirstInteraction();
+                        this.log('called duo.onFirstInteraction()');
+                    }
+                    catch (e) {
+                        this.logDebug('duo.onFirstInteraction() failed:', e);
+                    }
+                }
+                if (iframeWindow.duoDynamic?.onInteraction) {
+                    try {
+                        iframeWindow.duoDynamic.onInteraction();
+                        this.log('called duoDynamic.onInteraction()');
+                    }
+                    catch (e) {
+                        this.logDebug('duoDynamic.onInteraction() failed:', e);
+                    }
+                }
+                this.log('dispatched all update events and called Duolingo callbacks');
+            }
+            catch (e) {
+                this.logError('error triggering update callbacks:', e);
+            }
+        }
+        /**
+         * Synchronous delay using busy-wait (for use in synchronous solve method)
+         */
+        syncDelay(ms) {
+        }
+    }
+
+    /**
+     * Солвер для построения графика линии по уравнению
+     * Работает с MathDiagram и DraggablePoint компонентами в iframe
+     * Пример: построить график для уравнения y = x или y = 2x + 3
+     */
+    /**
+     * Парсит линейное уравнение вида y = mx или y = mx + b
+     * @param equation - уравнение в формате LaTeX или текста
+     * @returns объект с коэффициентом m и константой b, или null
+     */
+    function parseLinearEquation$1(equation) {
+        // Clean LaTeX
+        let cleaned = cleanLatexWrappers(equation);
+        cleaned = convertLatexOperators(cleaned);
+        cleaned = cleaned.replace(/\s+/g, '');
+        // Pattern: y = mx or y = mx + b or y = mx - b
+        // Match: y = (number)x or y = (number)x + (number) or y = (number)x - (number)
+        const patterns = [
+            /^y=(-?\d+\.?\d*)x$/, // y = 2x or y = -3x
+            /^y=(-?\d+\.?\d*)x\+(-?\d+\.?\d*)$/, // y = 2x + 3
+            /^y=(-?\d+\.?\d*)x-(-?\d+\.?\d*)$/, // y = 2x - 3
+        ];
+        for (const pattern of patterns) {
+            const match = cleaned.match(pattern);
+            if (match && match[1] !== undefined) {
+                const m = parseFloat(match[1]);
+                const b = match[2] !== undefined
+                    ? pattern === patterns[1]
+                        ? parseFloat(match[2])
+                        : -parseFloat(match[2])
+                    : 0;
+                if (!Number.isNaN(m)) {
+                    return { m, b };
+                }
+            }
+        }
+        return null;
+    }
+    class GraphLineSolver extends BaseSolver {
+        name = 'GraphLineSolver';
+        canSolve(context) {
+            // Check for iframe with MathDiagram and draggable points
+            const allIframes = findAllIframes(context.container);
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            for (const iframe of combinedIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    continue;
+                // Check for MathDiagram and addDraggablePoint
+                if ((srcdoc.includes('new MathDiagram') || srcdoc.includes('MathDiagram({')) &&
+                    srcdoc.includes('addDraggablePoint')) {
+                    this.log('found MathDiagram with draggable points in iframe');
+                    return true;
+                }
+            }
+            return false;
+        }
+        solve(context) {
+            this.log('starting');
+            // Find the diagram iframe
+            const allIframes = findAllIframes(context.container);
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            let diagramIframe = null;
+            for (const iframe of combinedIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    continue;
+                if ((srcdoc.includes('new MathDiagram') || srcdoc.includes('MathDiagram({')) &&
+                    srcdoc.includes('addDraggablePoint')) {
+                    diagramIframe = iframe;
+                    break;
+                }
+            }
+            if (!diagramIframe) {
+                return this.failure('graphLine', 'No diagram iframe found');
+            }
+            // Access iframe window
+            const iframeWindow = diagramIframe.contentWindow;
+            if (!iframeWindow) {
+                return this.failure('graphLine', 'Could not access iframe window');
+            }
+            // Try to wait a bit for diagram to initialize (synchronous check)
+            // Check if diagram exists, if not log a warning but proceed
+            if (!iframeWindow.diagram) {
+                this.logDebug('diagram not immediately available, will try alternative access methods');
+            }
+            // Try to get equation from INPUT_VARIABLES first
+            const srcdoc = diagramIframe.getAttribute('srcdoc') || '';
+            let m = null;
+            let b = null;
+            let equation = null;
+            // Extract INPUT_VARIABLES from srcdoc
+            // Format: const INPUT_VARIABLES = {"m": 1, "b": 0};
+            const inputVarsMatch = srcdoc.match(/INPUT_VARIABLES\s*=\s*(\{[^;]+\})/);
+            if (inputVarsMatch && inputVarsMatch[1] !== undefined) {
+                try {
+                    const jsonStr = inputVarsMatch[1];
+                    if (!jsonStr) {
+                        throw new Error('Empty JSON string');
+                    }
+                    const parsedVars = JSON.parse(jsonStr);
+                    if (typeof parsedVars.m === 'number' && typeof parsedVars.b === 'number') {
+                        m = parsedVars.m;
+                        b = parsedVars.b;
+                        // TypeScript: b is guaranteed to be number here due to the type check above
+                        const bValue = b;
+                        equation = `y = ${m === 1 ? '' : m === -1 ? '-' : m}x${bValue !== 0 ? (bValue > 0 ? ` + ${bValue}` : ` - ${Math.abs(bValue)}`) : ''}`;
+                        this.log('extracted equation from srcdoc:', equation);
+                    }
+                }
+                catch {
+                    this.logDebug('could not parse INPUT_VARIABLES from srcdoc, trying iframe window');
+                }
+            }
+            // Fallback: try to get from iframe window
+            if (m === null || b === null) {
+                const inputVars = iframeWindow.INPUT_VARIABLES;
+                if (inputVars && typeof inputVars.m === 'number' && typeof inputVars.b === 'number') {
+                    m = inputVars.m;
+                    b = inputVars.b;
+                    // TypeScript: b is guaranteed to be number here due to the type check above
+                    const bValue = b;
+                    equation = `y = ${m === 1 ? '' : m === -1 ? '-' : m}x${bValue !== 0 ? (bValue > 0 ? ` + ${bValue}` : ` - ${Math.abs(bValue)}`) : ''}`;
+                    this.log('extracted equation from iframe window:', equation);
+                }
+            }
+            // Fallback: try to extract equation from KaTeX on the page
+            if (m === null || b === null) {
+                equation = this.extractEquation(context);
+                if (equation) {
+                    const parsed = parseLinearEquation$1(equation);
+                    if (parsed) {
+                        m = parsed.m;
+                        b = parsed.b;
+                        this.log('extracted equation from KaTeX:', equation);
+                    }
+                }
+            }
+            if (m === null || b === null || equation === null) {
+                return this.failure('graphLine', 'Could not extract equation');
+            }
+            this.log('parsed equation: y =', m, 'x +', b);
+            // Calculate two points on the line
+            // Use x = 1 and x = 3 as default (same as in the transcript)
+            const point1X = 1;
+            const point1Y = m * point1X + b;
+            const point2X = 3;
+            const point2Y = m * point2X + b;
+            this.log(`target points: (${point1X}, ${point1Y}) and (${point2X}, ${point2Y})`);
+            // Try to access draggable points
+            // According to transcript, points are created with diagram.addDraggablePoint()
+            // and stored in diagram.components or accessible via OUTPUT_VARIABLES
+            let pointsMoved = 0;
+            // Method 1: Try to access via diagram.components
+            const diagram = iframeWindow.diagram;
+            if (diagram?.components) {
+                let componentsArray = [];
+                // Check if components is an array or has getAll() method
+                if (Array.isArray(diagram.components)) {
+                    componentsArray = diagram.components;
+                    this.log(`found ${componentsArray.length} components (array)`);
+                }
+                else if (typeof diagram.components.getAll === 'function') {
+                    componentsArray = diagram.components.getAll();
+                    this.log(`found ${componentsArray.length} components (via getAll())`);
+                }
+                // Filter for draggable points by componentType or by updatePosition method
+                const draggablePoints = componentsArray.filter((comp) => {
+                    // First try componentType (more reliable across iframe boundaries)
+                    if (comp.componentType === 'DraggablePoint') {
+                        return true;
+                    }
+                    // Fallback: check for updatePosition method
+                    return comp.updatePosition && typeof comp.updatePosition === 'function';
+                });
+                this.log(`found ${draggablePoints.length} draggable points`);
+                if (draggablePoints.length >= 2) {
+                    try {
+                        // Move first point
+                        const point1 = draggablePoints[0];
+                        if (point1?.updatePosition) {
+                            this.log(`attempting to move point 1 from (${point1.x}, ${point1.y}) to (${point1X}, ${point1Y})`);
+                            point1.updatePosition(point1X, point1Y);
+                            pointsMoved++;
+                            this.log(`moved point 1 to (${point1X}, ${point1Y})`);
+                        }
+                        else {
+                            this.logError('point 1 does not have updatePosition method');
+                        }
+                        // Move second point
+                        const point2 = draggablePoints[1];
+                        if (point2?.updatePosition) {
+                            this.log(`attempting to move point 2 from (${point2.x}, ${point2.y}) to (${point2X}, ${point2Y})`);
+                            point2.updatePosition(point2X, point2Y);
+                            pointsMoved++;
+                            this.log(`moved point 2 to (${point2X}, ${point2Y})`);
+                        }
+                        else {
+                            this.logError('point 2 does not have updatePosition method');
+                        }
+                    }
+                    catch (e) {
+                        this.logError('error moving points via components:', e);
+                    }
+                }
+                else {
+                    this.log(`not enough draggable points found: ${draggablePoints.length} (need 2)`);
+                }
+            }
+            else {
+                this.log('diagram.components not found');
+            }
+            // Method 2: Try to access via window.diagram directly (might be stored differently)
+            if (pointsMoved === 0) {
+                try {
+                    const windowWithDiagram = iframeWindow;
+                    const components = windowWithDiagram.diagram?.components;
+                    if (components) {
+                        let componentsArray = [];
+                        if (Array.isArray(components)) {
+                            componentsArray = components;
+                        }
+                        else if (typeof components.getAll === 'function') {
+                            componentsArray = components.getAll();
+                        }
+                        const draggablePoints = componentsArray.filter((comp) => {
+                            if (comp.componentType === 'DraggablePoint') {
+                                return true;
+                            }
+                            return comp.updatePosition && typeof comp.updatePosition === 'function';
+                        });
+                        if (draggablePoints.length >= 2) {
+                            const point1 = draggablePoints[0];
+                            if (point1?.updatePosition) {
+                                point1.updatePosition(point1X, point1Y);
+                                pointsMoved++;
+                                this.log(`moved point 1 to (${point1X}, ${point1Y}) via window.diagram`);
+                            }
+                            const point2 = draggablePoints[1];
+                            if (point2?.updatePosition) {
+                                point2.updatePosition(point2X, point2Y);
+                                pointsMoved++;
+                                this.log(`moved point 2 to (${point2X}, ${point2Y}) via window.diagram`);
+                            }
+                        }
+                    }
+                }
+                catch (e) {
+                    this.logError('error moving points via window.diagram:', e);
+                }
+            }
+            // Method 3: Try to access diagram via global MathDiagram instance or window properties
+            if (pointsMoved === 0) {
+                try {
+                    const windowAny = iframeWindow;
+                    // Try MathDiagram.instance
+                    if (windowAny.MathDiagram?.instance?.components) {
+                        const components = windowAny.MathDiagram.instance.components;
+                        let componentsArray = [];
+                        if (Array.isArray(components)) {
+                            componentsArray = components;
+                        }
+                        else if (typeof components.getAll === 'function') {
+                            componentsArray = components.getAll();
+                        }
+                        const draggablePoints = componentsArray.filter((comp) => {
+                            if (comp.componentType === 'DraggablePoint') {
+                                return true;
+                            }
+                            return comp.updatePosition && typeof comp.updatePosition === 'function';
+                        });
+                        if (draggablePoints.length >= 2) {
+                            const point1 = draggablePoints[0];
+                            if (point1?.updatePosition) {
+                                point1.updatePosition(point1X, point1Y);
+                                pointsMoved++;
+                                this.log(`moved point 1 to (${point1X}, ${point1Y}) via MathDiagram.instance`);
+                            }
+                            const point2 = draggablePoints[1];
+                            if (point2?.updatePosition) {
+                                point2.updatePosition(point2X, point2Y);
+                                pointsMoved++;
+                                this.log(`moved point 2 to (${point2X}, ${point2Y}) via MathDiagram.instance`);
+                            }
+                        }
+                    }
+                    // Try to find diagram via window properties (search for common names)
+                    if (pointsMoved === 0) {
+                        const possibleNames = ['diagram', 'mathDiagram', 'graphDiagram', 'lineDiagram'];
+                        for (const name of possibleNames) {
+                            const possibleDiagram = windowAny[name];
+                            if (possibleDiagram?.components) {
+                                this.log(`found diagram via window.${name}`);
+                                // Use same logic as Method 1
+                                let componentsArray = [];
+                                if (Array.isArray(possibleDiagram.components)) {
+                                    componentsArray = possibleDiagram.components;
+                                }
+                                else if (typeof possibleDiagram.components.getAll === 'function') {
+                                    componentsArray = possibleDiagram.components.getAll();
+                                }
+                                const draggablePoints = componentsArray.filter((comp) => {
+                                    if (comp.componentType === 'DraggablePoint') {
+                                        return true;
+                                    }
+                                    return comp.updatePosition && typeof comp.updatePosition === 'function';
+                                });
+                                if (draggablePoints.length >= 2) {
+                                    const point1 = draggablePoints[0];
+                                    if (point1?.updatePosition) {
+                                        point1.updatePosition(point1X, point1Y);
+                                        pointsMoved++;
+                                        this.log(`moved point 1 to (${point1X}, ${point1Y}) via window.${name}`);
+                                    }
+                                    const point2 = draggablePoints[1];
+                                    if (point2?.updatePosition) {
+                                        point2.updatePosition(point2X, point2Y);
+                                        pointsMoved++;
+                                        this.log(`moved point 2 to (${point2X}, ${point2Y}) via window.${name}`);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (e) {
+                    this.logError('error accessing diagram via global properties:', e);
+                }
+            }
+            // Method 4: Try to find draggable points by searching the iframe document
+            if (pointsMoved === 0) {
+                try {
+                    const iframeDoc = iframeWindow.document;
+                    if (iframeDoc) {
+                        // Look for SVG elements that might be draggable points
+                        const svgElements = iframeDoc.querySelectorAll('svg');
+                        for (const svg of svgElements) {
+                            // Try to find circles or points that might be draggable
+                            const circles = svg.querySelectorAll('circle');
+                            if (circles.length >= 2) {
+                                // Try to trigger updatePosition via events or direct access
+                                // This is a fallback - might need adjustment based on actual structure
+                                this.logDebug('found SVG circles, but updatePosition method not accessible');
+                            }
+                        }
+                    }
+                }
+                catch (e) {
+                    this.logError('error searching iframe document:', e);
+                }
+            }
+            // Method 5: Try to update OUTPUT_VARIABLES directly and trigger callbacks
+            if (pointsMoved === 0) {
+                try {
+                    const outputVars = iframeWindow.OUTPUT_VARIABLES;
+                    if (outputVars) {
+                        outputVars.point1 = { x: point1X, y: point1Y };
+                        outputVars.point2 = { x: point2X, y: point2Y };
+                        this.log('updated OUTPUT_VARIABLES directly');
+                        // Try to trigger update callbacks
+                        const event = new Event('input', { bubbles: true });
+                        iframeWindow.document.dispatchEvent(event);
+                        // Also try custom events
+                        iframeWindow.dispatchEvent(new CustomEvent('pointUpdate'));
+                        iframeWindow.dispatchEvent(new CustomEvent('diagramUpdate'));
+                        pointsMoved = 2; // Assume success if OUTPUT_VARIABLES were updated
+                    }
+                }
+                catch (e) {
+                    this.logError('error updating OUTPUT_VARIABLES:', e);
+                }
+            }
+            if (pointsMoved === 0) {
+                return this.failure('graphLine', 'Could not move draggable points');
+            }
+            return {
+                type: 'graphLine',
+                success: true,
+                equation,
+                pointsMoved,
+            };
+        }
+        extractEquation(context) {
+            // Look for equation in KaTeX annotations
+            const annotations = context.container.querySelectorAll('annotation');
+            for (const annotation of annotations) {
+                const text = annotation.textContent;
+                if (!text)
+                    continue;
+                // Check if it looks like an equation (y = ...)
+                if (text.includes('y') && text.includes('=') && text.includes('x')) {
+                    const katexValue = extractKatexValue(annotation.parentElement);
+                    if (katexValue) {
+                        return katexValue;
+                    }
+                }
+            }
+            // Also check equation container
+            if (context.equationContainer) {
+                const katexValue = extractKatexValue(context.equationContainer);
+                if (katexValue && katexValue.includes('y') && katexValue.includes('=') && katexValue.includes('x')) {
+                    return katexValue;
+                }
+            }
+            return null;
+        }
+    }
+
+    /**
+     * Солвер для заданий "Select the equation"
+     * Определяет уравнение по точкам на графике и выбирает правильный вариант
+     */
+    /**
+     * Извлекает точки из SVG элементов в iframe
+     */
+    function extractPointsFromSVG(iframeWindow) {
+        const points = [];
+        const seenPoints = new Set();
+        try {
+            const iframeDoc = iframeWindow.document;
+            if (!iframeDoc)
+                return points;
+            // Method 1: Extract from label text (most reliable)
+            // Points are in <g class="point static"> with <text class="label"> containing "(x, y)"
+            const staticPointGroups = iframeDoc.querySelectorAll('g.point.static');
+            for (const group of Array.from(staticPointGroups)) {
+                const label = group.querySelector('text.label');
+                if (label) {
+                    const labelText = label.textContent || '';
+                    // Try to extract (x, y) from label like "(2, 1)"
+                    const match = labelText.match(/\((-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\)/);
+                    if (match && match[1] && match[2]) {
+                        const x = parseFloat(match[1]);
+                        const y = parseFloat(match[2]);
+                        if (!Number.isNaN(x) && !Number.isNaN(y)) {
+                            const pointKey = `${x},${y}`;
+                            if (!seenPoints.has(pointKey)) {
+                                seenPoints.add(pointKey);
+                                points.push({ x, y });
+                            }
+                        }
+                    }
+                }
+            }
+            // Method 2: Extract from SVG coordinates by reading axis labels
+            // This is a fallback if labels don't have coordinates
+            if (points.length < 2) {
+                // Try to extract grid scale from axis labels
+                const xAxisLabels = iframeDoc.querySelectorAll('text.x-axis-label');
+                const yAxisLabels = iframeDoc.querySelectorAll('text.y-axis-label');
+                if (xAxisLabels.length > 0 && yAxisLabels.length > 0) {
+                    // Get the first and last x-axis labels to determine scale
+                    const firstXLabel = xAxisLabels[0];
+                    const lastXLabel = xAxisLabels[xAxisLabels.length - 1];
+                    const firstYLabel = yAxisLabels[0];
+                    const lastYLabel = yAxisLabels[yAxisLabels.length - 1];
+                    if (firstXLabel && lastXLabel && firstYLabel && lastYLabel) {
+                        const x0 = parseFloat(firstXLabel.textContent || '0');
+                        const x1 = parseFloat(lastXLabel.textContent || '0');
+                        const y0 = parseFloat(firstYLabel.textContent || '0');
+                        const y1 = parseFloat(lastYLabel.textContent || '0');
+                        const x0Pos = parseFloat(firstXLabel.getAttribute('x') || '0');
+                        const x1Pos = parseFloat(lastXLabel.getAttribute('x') || '0');
+                        const y0Pos = parseFloat(firstYLabel.getAttribute('y') || '0');
+                        const y1Pos = parseFloat(lastYLabel.getAttribute('y') || '0');
+                        if (!Number.isNaN(x0) && !Number.isNaN(x1) && !Number.isNaN(y0) && !Number.isNaN(y1) &&
+                            !Number.isNaN(x0Pos) && !Number.isNaN(x1Pos) && !Number.isNaN(y0Pos) && !Number.isNaN(y1Pos)) {
+                            const xScale = (x1 - x0) / (x1Pos - x0Pos);
+                            const yScale = (y1 - y0) / (y1Pos - y0Pos);
+                            // Now extract points from circles
+                            const circles = iframeDoc.querySelectorAll('g.point.static circle');
+                            for (const circle of Array.from(circles)) {
+                                const cx = parseFloat(circle.getAttribute('cx') || '0');
+                                const cy = parseFloat(circle.getAttribute('cy') || '0');
+                                if (!Number.isNaN(cx) && !Number.isNaN(cy)) {
+                                    const x = x0 + (cx - x0Pos) * xScale;
+                                    const y = y0 + (cy - y0Pos) * yScale;
+                                    const pointKey = `${x},${y}`;
+                                    if (!seenPoints.has(pointKey)) {
+                                        seenPoints.add(pointKey);
+                                        points.push({ x, y });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Method 3: Try to get points from diagram.components if available
+            const iframeWindowTyped = iframeWindow;
+            if (points.length < 2 && iframeWindowTyped.diagram?.components) {
+                const components = Array.isArray(iframeWindowTyped.diagram.components)
+                    ? iframeWindowTyped.diagram.components
+                    : typeof iframeWindowTyped.diagram.components.getAll === 'function'
+                        ? iframeWindowTyped.diagram.components.getAll()
+                        : [];
+                for (const comp of components) {
+                    if (('componentType' in comp && (comp.componentType === 'Point' || comp.componentType === 'StaticPoint')) ||
+                        (!('componentType' in comp) && comp.x !== undefined && comp.y !== undefined)) {
+                        if (comp.x !== undefined && comp.y !== undefined) {
+                            const pointKey = `${comp.x},${comp.y}`;
+                            if (!seenPoints.has(pointKey)) {
+                                seenPoints.add(pointKey);
+                                points.push({ x: comp.x, y: comp.y });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch (e) {
+            console.error('Error extracting points from SVG:', e);
+        }
+        return points;
+    }
+    /**
+     * Вычисляет уравнение прямой по точкам (линейная регрессия)
+     */
+    function calculateLinearEquation(points) {
+        if (points.length < 2)
+            return null;
+        const n = points.length;
+        let sumX = 0;
+        let sumY = 0;
+        let sumXY = 0;
+        let sumXX = 0;
+        for (const point of points) {
+            sumX += point.x;
+            sumY += point.y;
+            sumXY += point.x * point.y;
+            sumXX += point.x * point.x;
+        }
+        // Calculate slope: m = (n*sumXY - sumX*sumY) / (n*sumXX - sumX*sumX)
+        const denominator = n * sumXX - sumX * sumX;
+        if (Math.abs(denominator) < 0.0001) {
+            // Vertical line or all points have same x
+            return null;
+        }
+        const m = (n * sumXY - sumX * sumY) / denominator;
+        // Calculate intercept: b = (sumY - m*sumX) / n
+        const b = (sumY - m * sumX) / n;
+        return { m, b };
+    }
+    /**
+     * Парсит линейное уравнение вида y = mx или y = mx + b
+     * Поддерживает дробные коэффициенты
+     */
+    function parseLinearEquation(equation) {
+        // Clean LaTeX
+        let cleaned = cleanLatexWrappers(equation);
+        cleaned = convertLatexOperators(cleaned);
+        cleaned = convertLatexFractions(cleaned);
+        cleaned = cleaned.replace(/\s+/g, '');
+        // Pattern 1: y = mx (simple number coefficient)
+        let match = cleaned.match(/^y=(-?\d+\.?\d*)x$/);
+        if (match && match[1] !== undefined) {
+            const m = parseFloat(match[1]);
+            if (!Number.isNaN(m)) {
+                return { m, b: 0 };
+            }
+        }
+        // Pattern 2: y = (expression)x where expression can be evaluated (e.g., y=(1/2)x)
+        match = cleaned.match(/^y=(.+?)x$/);
+        if (match && match[1] !== undefined) {
+            const coefficientExpr = match[1];
+            const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+            const evaluated = evaluateMathExpression(cleanedCoeff);
+            if (evaluated !== null) {
+                return { m: evaluated, b: 0 };
+            }
+        }
+        // Pattern 3: y = mx + b or y = mx - b
+        match = cleaned.match(/^y=(-?\d+\.?\d*)x\+(-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined && match[2] !== undefined) {
+            const m = parseFloat(match[1]);
+            const b = parseFloat(match[2]);
+            if (!Number.isNaN(m) && !Number.isNaN(b)) {
+                return { m, b };
+            }
+        }
+        match = cleaned.match(/^y=(-?\d+\.?\d*)x-(-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined && match[2] !== undefined) {
+            const m = parseFloat(match[1]);
+            const b = -parseFloat(match[2]);
+            if (!Number.isNaN(m) && !Number.isNaN(b)) {
+                return { m, b };
+            }
+        }
+        // Pattern 4: y = (expression)x + b or y = (expression)x - b
+        match = cleaned.match(/^y=(.+?)x\+(-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined && match[2] !== undefined) {
+            const coefficientExpr = match[1];
+            const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+            const evaluated = evaluateMathExpression(cleanedCoeff);
+            const b = parseFloat(match[2]);
+            if (evaluated !== null && !Number.isNaN(b)) {
+                return { m: evaluated, b };
+            }
+        }
+        match = cleaned.match(/^y=(.+?)x-(-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined && match[2] !== undefined) {
+            const coefficientExpr = match[1];
+            const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+            const evaluated = evaluateMathExpression(cleanedCoeff);
+            const b = -parseFloat(match[2]);
+            if (evaluated !== null && !Number.isNaN(b)) {
+                return { m: evaluated, b };
+            }
+        }
+        return null;
+    }
+    class SelectEquationSolver extends BaseSolver {
+        name = 'SelectEquationSolver';
+        canSolve(context) {
+            // Check header for "select the equation"
+            const headerMatches = this.headerContains(context, 'select', 'equation');
+            if (!headerMatches) {
+                return false;
+            }
+            // Check for choices with equations
+            if (!context.choices?.length) {
+                return false;
+            }
+            // Check if there's a graph iframe with points
+            const allIframes = findAllIframes(context.container);
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            for (const iframe of combinedIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    continue;
+                // Check for MathDiagram or Grid2D with static points
+                if ((srcdoc.includes('new MathDiagram') || srcdoc.includes('MathDiagram({')) ||
+                    (srcdoc.includes('new Grid2D') || srcdoc.includes('Grid2D({'))) {
+                    // Check if choices contain equations
+                    const hasEquationChoices = context.choices.some(choice => {
+                        const katexValue = extractKatexValue(choice);
+                        if (!katexValue)
+                            return false;
+                        return katexValue.includes('y') && katexValue.includes('=') && katexValue.includes('x');
+                    });
+                    if (hasEquationChoices) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        solve(context) {
+            this.log('starting');
+            if (!context.choices?.length) {
+                return this.failure('selectEquation', 'no choices found');
+            }
+            // Find the diagram iframe
+            const allIframes = findAllIframes(context.container);
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            let diagramIframe = null;
+            for (const iframe of combinedIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    continue;
+                if ((srcdoc.includes('new MathDiagram') || srcdoc.includes('MathDiagram({')) ||
+                    (srcdoc.includes('new Grid2D') || srcdoc.includes('Grid2D({'))) {
+                    diagramIframe = iframe;
+                    break;
+                }
+            }
+            if (!diagramIframe) {
+                return this.failure('selectEquation', 'no diagram iframe found');
+            }
+            // Access iframe window
+            const iframeWindow = diagramIframe.contentWindow;
+            if (!iframeWindow) {
+                return this.failure('selectEquation', 'could not access iframe window');
+            }
+            // Extract points from the graph
+            const points = extractPointsFromSVG(iframeWindow);
+            this.log(`extracted ${points.length} points:`, points);
+            if (points.length < 2) {
+                return this.failure('selectEquation', `not enough points: ${points.length} (need at least 2)`);
+            }
+            // Calculate equation from points
+            const calculatedEquation = calculateLinearEquation(points);
+            if (!calculatedEquation) {
+                return this.failure('selectEquation', 'could not calculate equation from points');
+            }
+            this.log(`calculated equation: y = ${calculatedEquation.m}x + ${calculatedEquation.b}`);
+            // Parse all choice equations and find match
+            let matchedIndex = -1;
+            const tolerance = 0.0001;
+            for (let i = 0; i < context.choices.length; i++) {
+                const choice = context.choices[i];
+                if (!choice)
+                    continue;
+                const katexValue = extractKatexValue(choice);
+                if (!katexValue)
+                    continue;
+                const parsed = parseLinearEquation(katexValue);
+                if (!parsed) {
+                    this.log(`choice ${i}: could not parse equation: ${katexValue}`);
+                    continue;
+                }
+                this.log(`choice ${i}: ${katexValue} -> y = ${parsed.m}x + ${parsed.b}`);
+                // Compare coefficients with tolerance
+                if (Math.abs(parsed.m - calculatedEquation.m) < tolerance &&
+                    Math.abs(parsed.b - calculatedEquation.b) < tolerance) {
+                    matchedIndex = i;
+                    this.log(`matched choice ${i}: ${katexValue}`);
+                    break;
+                }
+            }
+            if (matchedIndex === -1) {
+                return this.failure('selectEquation', 'no matching equation found in choices');
+            }
+            // Click the matched choice
+            const choiceButtons = context.container.querySelectorAll('[data-test="challenge-choice"]');
+            const choiceButton = choiceButtons[matchedIndex];
+            if (!choiceButton) {
+                return this.failure('selectEquation', `choice button ${matchedIndex} not found`);
+            }
+            try {
+                choiceButton.click();
+                this.log(`clicked choice ${matchedIndex}`);
+            }
+            catch (e) {
+                return this.failure('selectEquation', `error clicking choice: ${e}`);
+            }
+            return {
+                type: 'selectEquation',
+                success: true,
+                calculatedEquation,
+                selectedChoice: matchedIndex,
+            };
+        }
+    }
+
+    /**
+     * Солвер для заданий "Select the constant of proportionality"
+     * Извлекает коэффициент из уравнения вида y = mx и выбирает правильный вариант
+     */
+    /**
+     * Извлекает коэффициент пропорциональности из уравнения вида y = mx или y = mx + b
+     * Поддерживает дробные коэффициенты
+     */
+    function extractConstantFromEquation(equation) {
+        // Clean LaTeX
+        let cleaned = cleanLatexWrappers(equation);
+        cleaned = convertLatexOperators(cleaned);
+        cleaned = convertLatexFractions(cleaned);
+        cleaned = cleaned.replace(/\s+/g, '');
+        // Pattern 1: y = mx (simple number coefficient)
+        let match = cleaned.match(/^y=(-?\d+\.?\d*)x$/);
+        if (match && match[1] !== undefined) {
+            const m = parseFloat(match[1]);
+            if (!Number.isNaN(m)) {
+                return m;
+            }
+        }
+        // Pattern 2: y = (expression)x where expression can be evaluated (e.g., y=(1/2)x)
+        match = cleaned.match(/^y=(.+?)x$/);
+        if (match && match[1] !== undefined) {
+            const coefficientExpr = match[1];
+            const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+            const evaluated = evaluateMathExpression(cleanedCoeff);
+            if (evaluated !== null) {
+                return evaluated;
+            }
+        }
+        // Pattern 3: y = mx + b or y = mx - b (we still want the coefficient m)
+        match = cleaned.match(/^y=(-?\d+\.?\d*)x[+-](-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined) {
+            const m = parseFloat(match[1]);
+            if (!Number.isNaN(m)) {
+                return m; // Return coefficient, ignore b
+            }
+        }
+        // Pattern 4: y = (expression)x + b or y = (expression)x - b
+        match = cleaned.match(/^y=(.+?)x[+-](-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined) {
+            const coefficientExpr = match[1];
+            const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+            const evaluated = evaluateMathExpression(cleanedCoeff);
+            if (evaluated !== null) {
+                return evaluated; // Return coefficient, ignore b
+            }
+        }
+        return null;
+    }
+    class SelectConstantSolver extends BaseSolver {
+        name = 'SelectConstantSolver';
+        canSolve(context) {
+            // Check header for "select the constant of proportionality"
+            const headerMatches = this.headerContains(context, 'select', 'constant', 'proportionality');
+            if (!headerMatches) {
+                return false;
+            }
+            // Check for choices
+            if (!context.choices?.length) {
+                return false;
+            }
+            // Check if there's an equation displayed (y = mx format)
+            // The equation might be in the challenge container or in a separate element
+            const containerText = context.container.textContent || '';
+            const hasEquation = containerText.includes('y') && containerText.includes('=') && containerText.includes('x');
+            return hasEquation;
+        }
+        solve(context) {
+            this.log('starting');
+            if (!context.choices?.length) {
+                return this.failure('selectConstant', 'no choices found');
+            }
+            // Extract equation from the challenge
+            // The equation might be displayed in KaTeX format
+            let equation = null;
+            // Method 1: Look for equation in KaTeX annotations
+            const annotations = context.container.querySelectorAll('annotation');
+            for (const annotation of annotations) {
+                const text = annotation.textContent;
+                if (!text)
+                    continue;
+                // Check if it looks like an equation (y = ...)
+                if (text.includes('y') && text.includes('=') && text.includes('x')) {
+                    const katexValue = extractKatexValue(annotation.parentElement);
+                    if (katexValue) {
+                        equation = katexValue;
+                        break;
+                    }
+                }
+            }
+            // Method 2: Look for equation in the challenge container directly
+            if (!equation) {
+                // Try to find KaTeX elements that contain equations
+                const katexElements = context.container.querySelectorAll('.katex');
+                for (const katexEl of Array.from(katexElements)) {
+                    const katexValue = extractKatexValue(katexEl);
+                    if (katexValue && katexValue.includes('y') && katexValue.includes('=') && katexValue.includes('x')) {
+                        equation = katexValue;
+                        break;
+                    }
+                }
+            }
+            // Method 3: Extract from text content using regex
+            if (!equation) {
+                const containerText = context.container.textContent || '';
+                const equationMatch = containerText.match(/y\s*=\s*([^\s]+)\s*x/);
+                if (equationMatch && equationMatch[1]) {
+                    equation = `y=${equationMatch[1]}x`;
+                }
+            }
+            if (!equation) {
+                return this.failure('selectConstant', 'could not extract equation from challenge');
+            }
+            this.log('extracted equation:', equation);
+            // Extract constant of proportionality
+            const constant = extractConstantFromEquation(equation);
+            if (constant === null) {
+                return this.failure('selectConstant', `could not extract constant from equation: ${equation}`);
+            }
+            this.log('extracted constant:', constant);
+            // Find matching choice
+            let matchedIndex = -1;
+            const tolerance = 0.0001;
+            for (let i = 0; i < context.choices.length; i++) {
+                const choice = context.choices[i];
+                if (!choice)
+                    continue;
+                // Extract value from choice (could be KaTeX or plain text)
+                const katexValue = extractKatexValue(choice);
+                let choiceValue = null;
+                if (katexValue) {
+                    // Try to evaluate as math expression
+                    choiceValue = evaluateMathExpression(katexValue);
+                }
+                // Fallback: try to parse as number from text content
+                if (choiceValue === null) {
+                    const choiceText = choice.textContent || '';
+                    const numberMatch = choiceText.match(/(-?\d+\.?\d*)/);
+                    if (numberMatch && numberMatch[1]) {
+                        choiceValue = parseFloat(numberMatch[1]);
+                    }
+                }
+                if (choiceValue === null || Number.isNaN(choiceValue)) {
+                    this.log(`choice ${i}: could not extract value`);
+                    continue;
+                }
+                this.log(`choice ${i}: ${katexValue || choice.textContent} -> ${choiceValue}`);
+                // Compare with tolerance for floating-point comparison
+                if (Math.abs(choiceValue - constant) < tolerance) {
+                    matchedIndex = i;
+                    this.log(`matched choice ${i}: ${choiceValue}`);
+                    break;
+                }
+            }
+            if (matchedIndex === -1) {
+                return this.failure('selectConstant', `no matching choice found for constant: ${constant}`);
+            }
+            // Click the matched choice
+            const choiceButtons = context.container.querySelectorAll('[data-test="challenge-choice"]');
+            const choiceButton = choiceButtons[matchedIndex];
+            if (!choiceButton) {
+                return this.failure('selectConstant', `choice button ${matchedIndex} not found`);
+            }
+            try {
+                choiceButton.click();
+                this.log(`clicked choice ${matchedIndex}`);
+            }
+            catch (e) {
+                return this.failure('selectConstant', `error clicking choice: ${e}`);
+            }
+            return {
+                type: 'selectConstant',
+                success: true,
+                constant,
+                selectedChoice: matchedIndex,
+            };
+        }
+    }
+
+    /**
+     * Солвер для заданий "Select the match" с неравенствами на числовой прямой
+     * Извлекает неравенство из диаграммы NumberLine и выбирает правильный вариант
+     */
+    /**
+     * Извлекает информацию о неравенстве из диаграммы NumberLine
+     */
+    function extractInequalityFromDiagram(iframeWindow) {
+        try {
+            const iframeWindowTyped = iframeWindow;
+            // Method 1: getOutputVariables
+            let endpointPosition;
+            let isInclusive;
+            if (typeof iframeWindowTyped.getOutputVariables === 'function') {
+                const vars = iframeWindowTyped.getOutputVariables();
+                if (vars) {
+                    endpointPosition = vars.endpoint_position;
+                    isInclusive = vars.is_inclusive;
+                }
+            }
+            // Method 2: INPUT_VARIABLES
+            if (endpointPosition === undefined && iframeWindowTyped.INPUT_VARIABLES) {
+                endpointPosition = iframeWindowTyped.INPUT_VARIABLES.endpoint_position;
+                isInclusive = iframeWindowTyped.INPUT_VARIABLES.is_inclusive;
+            }
+            // Method 3: Parse from srcdoc if available
+            if (endpointPosition === undefined || isInclusive === undefined) {
+                const iframeDoc = iframeWindow.document;
+                if (iframeDoc) {
+                    // Try to find the script tag with INPUT_VARIABLES
+                    const scripts = iframeDoc.querySelectorAll('script');
+                    for (const script of Array.from(scripts)) {
+                        const scriptText = script.textContent || '';
+                        const endpointMatch = scriptText.match(/endpoint_position["\s]*:\s*(\d+)/);
+                        const inclusiveMatch = scriptText.match(/is_inclusive["\s]*:\s*(true|false)/);
+                        if (endpointMatch && endpointMatch[1]) {
+                            endpointPosition = parseInt(endpointMatch[1], 10);
+                        }
+                        if (inclusiveMatch) {
+                            isInclusive = inclusiveMatch[1] === 'true';
+                        }
+                    }
+                    // Method 4: Check SVG for open/closed circle if isInclusive is still undefined
+                    if (isInclusive === undefined && iframeDoc) {
+                        // Look for point elements with class "open" (open circle) or without (closed circle)
+                        const pointElements = iframeDoc.querySelectorAll('g.point');
+                        for (const pointEl of Array.from(pointElements)) {
+                            if (pointEl.classList.contains('open')) {
+                                isInclusive = false;
+                                break;
+                            }
+                            else if (pointEl.querySelector('circle') && !pointEl.classList.contains('open')) {
+                                // Check if circle has stroke-width > 0 (closed circle)
+                                const circle = pointEl.querySelector('circle');
+                                if (circle) {
+                                    const strokeWidth = parseFloat(circle.getAttribute('stroke-width') || '0');
+                                    if (strokeWidth > 0) {
+                                        isInclusive = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (endpointPosition === undefined) {
+                return null;
+            }
+            // Default isInclusive to false if still undefined (open circle is more common)
+            if (isInclusive === undefined) {
+                isInclusive = false;
+            }
+            // Determine direction by checking the ray/line direction
+            // If ray points left (from endpoint to smaller x), it's x < endpoint or x ≤ endpoint
+            // If ray points right (from endpoint to larger x), it's x > endpoint or x ≥ endpoint
+            let direction = 'left'; // Default to left
+            try {
+                const iframeDoc = iframeWindow.document;
+                if (iframeDoc) {
+                    // Method 1: Check line coordinates in SVG
+                    const lines = iframeDoc.querySelectorAll('line');
+                    for (const line of Array.from(lines)) {
+                        const x1 = parseFloat(line.getAttribute('x1') || '0');
+                        const x2 = parseFloat(line.getAttribute('x2') || '0');
+                        if (!Number.isNaN(x1) && !Number.isNaN(x2)) {
+                            // If x2 < x1, ray points left; if x2 > x1, ray points right
+                            if (x2 < x1) {
+                                direction = 'left';
+                                break;
+                            }
+                            else if (x2 > x1) {
+                                direction = 'right';
+                                break;
+                            }
+                        }
+                    }
+                    // Method 2: Parse from script if line coordinates don't help
+                    if (direction === 'left') {
+                        const scriptText = iframeDoc.documentElement.innerHTML;
+                        const xAxisMinMatch = scriptText.match(/xAxisMin["\s]*:\s*(-?\d+)/);
+                        if (xAxisMinMatch && xAxisMinMatch[1]) {
+                            const xAxisMin = parseInt(xAxisMinMatch[1], 10);
+                            // If xAxisMin < endpoint_position, ray points left
+                            // If xAxisMin > endpoint_position, ray points right
+                            if (xAxisMin < endpointPosition) {
+                                direction = 'left';
+                            }
+                            else if (xAxisMin > endpointPosition) {
+                                direction = 'right';
+                            }
+                        }
+                    }
+                }
+            }
+            catch {
+                // Default to left if we can't determine
+                direction = 'left';
+            }
+            // Build inequality
+            const operator = direction === 'left'
+                ? (isInclusive ? '≤' : '<')
+                : (isInclusive ? '≥' : '>');
+            return {
+                variable: 'x',
+                operator,
+                value: endpointPosition,
+            };
+        }
+        catch (e) {
+            console.error('Error extracting inequality from diagram:', e);
+            return null;
+        }
+    }
+    /**
+     * Парсит неравенство из текста (например, "x ≥ 9" или "x ≤ 9")
+     */
+    function parseInequality(text) {
+        // Clean LaTeX
+        let cleaned = cleanLatexWrappers(text);
+        cleaned = convertLatexOperators(cleaned);
+        cleaned = cleaned.replace(/\s+/g, '');
+        // Pattern 1: x ≥ 9, x ≤ 9, x > 9, x < 9
+        const match = cleaned.match(/^([xyz])([<>≤≥])(-?\d+\.?\d*)$/i);
+        if (match && match[1] && match[2] && match[3]) {
+            const variable = match[1].toLowerCase();
+            const operator = match[2];
+            const value = parseFloat(match[3]);
+            if (!Number.isNaN(value)) {
+                return { variable, operator, value };
+            }
+        }
+        // Pattern 2: 9 ≤ x, 9 ≥ x, 9 < x, 9 > x (reversed)
+        const reversedMatch = cleaned.match(/^(-?\d+\.?\d*)([<>≤≥])([xyz])$/i);
+        if (reversedMatch && reversedMatch[1] && reversedMatch[2] && reversedMatch[3]) {
+            const value = parseFloat(reversedMatch[1]);
+            const operatorRaw = reversedMatch[2];
+            const variable = reversedMatch[3].toLowerCase();
+            if (!Number.isNaN(value)) {
+                // Reverse the operator
+                let operator;
+                if (operatorRaw === '<')
+                    operator = '>';
+                else if (operatorRaw === '>')
+                    operator = '<';
+                else if (operatorRaw === '≤')
+                    operator = '≥';
+                else if (operatorRaw === '≥')
+                    operator = '≤';
+                else
+                    return null;
+                return { variable, operator, value };
+            }
+        }
+        return null;
+    }
+    /**
+     * Сравнивает два неравенства на равенство
+     */
+    function inequalitiesMatch(ineq1, ineq2) {
+        if (ineq1.variable !== ineq2.variable)
+            return false;
+        if (Math.abs(ineq1.value - ineq2.value) > 0.0001)
+            return false;
+        if (ineq1.operator !== ineq2.operator)
+            return false;
+        return true;
+    }
+    class SelectMatchInequalitySolver extends BaseSolver {
+        name = 'SelectMatchInequalitySolver';
+        canSolve(context) {
+            // Check header for "select the match"
+            const headerMatches = this.headerContains(context, 'select', 'match');
+            if (!headerMatches) {
+                return false;
+            }
+            // Check for choices
+            if (!context.choices?.length) {
+                return false;
+            }
+            // Check if there's a NumberLine iframe
+            const allIframes = findAllIframes(context.container);
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            for (const iframe of combinedIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    continue;
+                // Check for NumberLine
+                if (srcdoc.includes('NumberLine') || srcdoc.includes('new NumberLine')) {
+                    // Check if choices contain inequalities
+                    const hasInequalityChoices = context.choices.some(choice => {
+                        const katexValue = extractKatexValue(choice);
+                        if (!katexValue)
+                            return false;
+                        const parsed = parseInequality(katexValue);
+                        return parsed !== null;
+                    });
+                    if (hasInequalityChoices) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        solve(context) {
+            this.log('starting');
+            if (!context.choices?.length) {
+                return this.failure('selectMatchInequality', 'no choices found');
+            }
+            // Find the NumberLine iframe
+            const allIframes = findAllIframes(context.container);
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            let diagramIframe = null;
+            for (const iframe of combinedIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    continue;
+                if (srcdoc.includes('NumberLine') || srcdoc.includes('new NumberLine')) {
+                    diagramIframe = iframe;
+                    break;
+                }
+            }
+            if (!diagramIframe) {
+                return this.failure('selectMatchInequality', 'no NumberLine iframe found');
+            }
+            // Access iframe window
+            const iframeWindow = diagramIframe.contentWindow;
+            if (!iframeWindow) {
+                return this.failure('selectMatchInequality', 'could not access iframe window');
+            }
+            // Extract inequality from diagram
+            // Try multiple times in case diagram is still initializing
+            let extractedInequality = null;
+            const maxAttempts = 5;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                extractedInequality = extractInequalityFromDiagram(iframeWindow);
+                if (extractedInequality) {
+                    if (attempt > 1) {
+                        this.log(`extracted inequality on attempt ${attempt}`);
+                    }
+                    break;
+                }
+            }
+            if (!extractedInequality) {
+                return this.failure('selectMatchInequality', 'could not extract inequality from diagram');
+            }
+            const inequalityStr = `${extractedInequality.variable} ${extractedInequality.operator} ${extractedInequality.value}`;
+            this.log(`extracted inequality: ${inequalityStr}`);
+            // Parse all choice inequalities and find match
+            let matchedIndex = -1;
+            for (let i = 0; i < context.choices.length; i++) {
+                const choice = context.choices[i];
+                if (!choice)
+                    continue;
+                const katexValue = extractKatexValue(choice);
+                if (!katexValue) {
+                    this.log(`choice ${i}: could not extract KaTeX value`);
+                    continue;
+                }
+                const parsed = parseInequality(katexValue);
+                if (!parsed) {
+                    this.log(`choice ${i}: could not parse inequality: ${katexValue}`);
+                    continue;
+                }
+                const choiceStr = `${parsed.variable} ${parsed.operator} ${parsed.value}`;
+                this.log(`choice ${i}: ${katexValue} -> ${choiceStr}`);
+                if (inequalitiesMatch(extractedInequality, parsed)) {
+                    matchedIndex = i;
+                    this.log(`matched choice ${i}: ${choiceStr}`);
+                    break;
+                }
+            }
+            if (matchedIndex === -1) {
+                return this.failure('selectMatchInequality', `no matching inequality found for: ${inequalityStr}`);
+            }
+            // Click the matched choice
+            const choiceButtons = context.container.querySelectorAll('[data-test="challenge-choice"]');
+            const choiceButton = choiceButtons[matchedIndex];
+            if (!choiceButton) {
+                return this.failure('selectMatchInequality', `choice button ${matchedIndex} not found`);
+            }
+            try {
+                choiceButton.click();
+                this.log(`clicked choice ${matchedIndex}`);
+            }
+            catch (e) {
+                return this.failure('selectMatchInequality', `error clicking choice: ${e}`);
+            }
+            return {
+                type: 'selectMatchInequality',
+                success: true,
+                extractedInequality: inequalityStr,
+                selectedChoice: matchedIndex,
+            };
+        }
+    }
+
+    /**
+     * Солвер для заданий "Select all that match"
+     * Выбирает все выражения, которые равны заданному значению
+     *
+     * Например: "X = 11 - 4" (X = 7)
+     * Варианты: "10 - 3" (7), "14 - 70" (-56), "13 - 6" (7), "14 - 7" (7)
+     * Нужно выбрать: "10 - 3", "13 - 6", "14 - 7"
+     */
+    class SelectAllMatchSolver extends BaseSolver {
+        name = 'SelectAllMatchSolver';
+        canSolve(context) {
+            // Check header for "select all that match"
+            const headerMatches = this.headerContains(context, 'select', 'all', 'match');
+            if (!headerMatches) {
+                return false;
+            }
+            // Check for choices
+            if (!context.choices?.length) {
+                return false;
+            }
+            // Check if choices are checkboxes (role="checkbox")
+            const firstChoice = context.choices[0];
+            if (!firstChoice) {
+                return false;
+            }
+            const isCheckbox = firstChoice.getAttribute('role') === 'checkbox' ||
+                firstChoice.hasAttribute('aria-checked');
+            if (!isCheckbox) {
+                return false;
+            }
+            // Check if there's an equation/condition container
+            const equationContainer = context.container.querySelector(SELECTORS.EQUATION_CONTAINER);
+            if (!equationContainer) {
+                return false;
+            }
+            return true;
+        }
+        solve(context) {
+            this.log('starting');
+            if (!context.choices?.length) {
+                return this.failure('selectAllMatch', 'no choices found');
+            }
+            // Find the equation/condition container
+            const equationContainer = context.container.querySelector(SELECTORS.EQUATION_CONTAINER);
+            if (!equationContainer) {
+                return this.failure('selectAllMatch', 'equation container not found');
+            }
+            // Extract the condition (e.g., "X = 11 - 4")
+            const conditionValue = extractKatexValue(equationContainer);
+            if (!conditionValue) {
+                return this.failure('selectAllMatch', 'could not extract condition');
+            }
+            this.log('condition:', conditionValue);
+            // Parse the condition to extract the target value
+            // Format: "X = 11 - 4" or "X=11-4" or "11-4" or "20=\duoblank{5}"
+            let targetValue = null;
+            // Check if there's a \duoblank pattern (e.g., "20=\duoblank{5}")
+            // In this case, the target value is on the LEFT side of the equation
+            if (conditionValue.includes('\\duoblank') || conditionValue.includes('duoblank')) {
+                // Extract value from left side of equation (before "=")
+                // Handle patterns like "20=" or "20 = " or "\mathbf{20}="
+                const leftSideMatch = conditionValue.match(/^([^=]+?)\s*=/);
+                if (leftSideMatch && leftSideMatch[1]) {
+                    let leftSide = leftSideMatch[1].trim();
+                    // Clean any remaining LaTeX wrappers
+                    leftSide = leftSide.replace(/\\mathbf\{([^}]+)\}/g, '$1');
+                    leftSide = leftSide.replace(/\\textbf\{([^}]+)\}/g, '$1');
+                    leftSide = leftSide.replace(/\s+/g, '');
+                    targetValue = evaluateMathExpression(leftSide);
+                    if (targetValue === null) {
+                        // Fallback: try to parse as a simple number
+                        const numberMatch = leftSide.match(/^(-?\d+(?:\.\d+)?)/);
+                        if (numberMatch && numberMatch[1]) {
+                            targetValue = parseFloat(numberMatch[1]);
+                        }
+                    }
+                    this.log(`found duoblank pattern, extracted value from left side: ${leftSide} → ${targetValue}`);
+                }
+                else {
+                    // Fallback: try to extract number directly if left side is just a number
+                    const numberMatch = conditionValue.match(/^(-?\d+(?:\.\d+)?)/);
+                    if (numberMatch && numberMatch[1]) {
+                        targetValue = parseFloat(numberMatch[1]);
+                        this.log(`found duoblank pattern, extracted number from start: ${targetValue}`);
+                    }
+                }
+            }
+            else {
+                // Standard case: extract value after "="
+                const equalsMatch = conditionValue.match(/=\s*([^=]+)$/);
+                if (equalsMatch && equalsMatch[1]) {
+                    const expression = equalsMatch[1].trim();
+                    targetValue = evaluateMathExpression(expression);
+                    this.log(`extracted expression after '=': ${expression}`);
+                }
+                else {
+                    // If no "=" found, try to evaluate the whole expression
+                    // This handles cases where the condition is just an expression
+                    targetValue = evaluateMathExpression(conditionValue);
+                    this.log('evaluating whole condition as expression');
+                }
+            }
+            if (targetValue === null) {
+                return this.failure('selectAllMatch', `could not evaluate target value from: ${conditionValue}`);
+            }
+            this.log('target value:', targetValue);
+            // Evaluate all choices and find matches
+            const matchedIndices = [];
+            for (let i = 0; i < context.choices.length; i++) {
+                const choice = context.choices[i];
+                if (!choice)
+                    continue;
+                const choiceValue = extractKatexValue(choice);
+                if (!choiceValue) {
+                    this.log(`choice ${i}: could not extract value`);
+                    continue;
+                }
+                const choiceResult = evaluateMathExpression(choiceValue);
+                if (choiceResult === null) {
+                    this.log(`choice ${i}: could not evaluate: ${choiceValue}`);
+                    continue;
+                }
+                this.log(`choice ${i}: ${choiceValue} = ${choiceResult}`);
+                // Check if values match (with small tolerance for floating point)
+                if (Math.abs(choiceResult - targetValue) < 0.0001) {
+                    matchedIndices.push(i);
+                    this.log(`matched choice ${i}: ${choiceValue} = ${choiceResult}`);
+                }
+            }
+            if (matchedIndices.length === 0) {
+                return this.failure('selectAllMatch', `no matching choices found for value: ${targetValue}`);
+            }
+            this.log(`found ${matchedIndices.length} matching choices:`, matchedIndices);
+            // Click all matched choices
+            for (const index of matchedIndices) {
+                const choice = context.choices[index];
+                if (!choice) {
+                    this.log(`warning: choice ${index} not found`);
+                    continue;
+                }
+                try {
+                    // For checkboxes, we need to click them to toggle
+                    choice.click();
+                    this.log(`clicked choice ${index}`);
+                }
+                catch (e) {
+                    this.log(`error clicking choice ${index}:`, e);
+                }
+            }
+            return {
+                type: 'selectAllMatch',
+                success: true,
+                targetValue,
+                matchedChoices: matchedIndices,
+            };
         }
     }
 
@@ -7105,6 +9591,12 @@ var AutoDuo = (function (exports) {
             // Note: InteractiveSliderSolver must be BEFORE ExpressionBuildSolver
             // because NumberLine sliders may contain "ExpressionBuild" in their iframe code
             this.register(new TableFillSolver()); // Must be before InteractiveSliderSolver (Table might contain NumberLine)
+            this.register(new SelectConstantSolver()); // Must be before SelectEquationSolver (selecting constant is more specific)
+            this.register(new SelectAllMatchSolver()); // Must be before other select solvers (select all that match is specific)
+            this.register(new SelectMatchInequalitySolver()); // Must be before InteractiveSliderSolver (selecting match with NumberLine is more specific)
+            this.register(new SelectEquationSolver()); // Must be before PlotPointsSolver and GraphLineSolver (selecting equation is more specific)
+            this.register(new PlotPointsSolver()); // Must be before GraphLineSolver (Grid2D is more specific than MathDiagram)
+            this.register(new GraphLineSolver()); // Must be before InteractiveSliderSolver (MathDiagram might contain NumberLine)
             this.register(new InteractiveSliderSolver());
             this.register(new ExpressionBuildSolver());
             this.register(new InteractiveSpinnerSolver());
@@ -7275,7 +9767,8 @@ var AutoDuo = (function (exports) {
                         this.solvedCount++;
                         await delay$1(this.config.delayAfterSolve);
                         // Click continue/check button (wait for it to become enabled)
-                        const clicked = await clickContinueButtonAsync(5000);
+                        // Use longer timeout for table challenges which may need more processing time
+                        const clicked = await clickContinueButtonAsync(10000);
                         if (!clicked) {
                             logger.warn('AutoRunner: continue button not clicked (may be disabled or not found)');
                             // Don't increment stuck counter here - the challenge was solved,
@@ -7707,6 +10200,7 @@ var AutoDuo = (function (exports) {
     exports.ExpressionBuildSolver = ExpressionBuildSolver;
     exports.FactorTreeSolver = FactorTreeSolver;
     exports.FractionToDecimalChoiceSolver = FractionToDecimalChoiceSolver;
+    exports.GraphLineSolver = GraphLineSolver;
     exports.InteractiveSliderSolver = InteractiveSliderSolver;
     exports.InteractiveSpinnerSolver = InteractiveSpinnerSolver;
     exports.LOG = LOG;
@@ -7718,9 +10212,14 @@ var AutoDuo = (function (exports) {
     exports.PatternTableSolver = PatternTableSolver;
     exports.PieChartSelectFractionSolver = PieChartSelectFractionSolver;
     exports.PieChartTextInputSolver = PieChartTextInputSolver;
+    exports.PlotPointsSolver = PlotPointsSolver;
     exports.RatioChoiceSolver = RatioChoiceSolver;
     exports.RoundToNearestSolver = RoundToNearestSolver;
+    exports.SelectAllMatchSolver = SelectAllMatchSolver;
+    exports.SelectConstantSolver = SelectConstantSolver;
+    exports.SelectEquationSolver = SelectEquationSolver;
     exports.SelectEquivalentFractionSolver = SelectEquivalentFractionSolver;
+    exports.SelectMatchInequalitySolver = SelectMatchInequalitySolver;
     exports.SelectOperatorSolver = SelectOperatorSolver;
     exports.SelectPieChartSolver = SelectPieChartSolver;
     exports.SolveForXSolver = SolveForXSolver;

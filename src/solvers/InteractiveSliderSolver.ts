@@ -373,8 +373,16 @@ export class InteractiveSliderSolver extends BaseSolver {
                 }
             }
 
-            // Equation with variable like "16-3=X" or "X=16-3"
+            // Equation with variable like "16-3=X", "X=16-3", or "12+X=26"
             if (text.includes('=') && /[XYZ]/.test(text)) {
+                // First try solveEquationWithBlank which handles all cases including X in the middle
+                const result = solveEquationWithBlank(text);
+                if (result !== null) {
+                    this.log('solved equation with solveEquationWithBlank:', text, '→', result);
+                    return { value: result, equation: text };
+                }
+
+                // Fallback: Try simple patterns for cases solveEquationWithBlank might miss
                 // Clean the text
                 const cleanText = text
                     .replace(/\\mathbf\{([^}]+)\}/g, '$1')

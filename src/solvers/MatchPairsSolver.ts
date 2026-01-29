@@ -12,6 +12,7 @@ import { extractGridFraction, isGridDiagram } from '../parsers/GridParser';
 import { evaluateMathExpression } from '../math/expressions';
 import { roundToNearest } from '../math/rounding';
 import { findAllIframes } from '../dom/selectors';
+import { cleanLatexWrappers, convertLatexOperators, convertLatexFractions } from '../parsers/latex';
 
 interface IToken {
     index: number;
@@ -25,6 +26,9 @@ interface IToken {
     roundingBase?: number;
     isFactorsList?: boolean;
     factors?: number[];
+    isEquation?: boolean;
+    equationCoefficient?: number;
+    isUnitRate?: boolean;
 }
 
 interface IMatchPairsResult extends ISolverResult {
@@ -176,7 +180,7 @@ export class MatchPairsSolver extends BaseSolver {
                 continue;
             }
 
-            // Check for "Nearest X" label
+            // Check for "Nearest X" or "UNIT RATE" label
             const nearestLabel = token.querySelector('._27M4R');
             if (nearestLabel) {
                 const labelText = nearestLabel.textContent ?? '';
@@ -197,6 +201,24 @@ export class MatchPairsSolver extends BaseSolver {
                         continue;
                     } else {
                         this.log('token', i, 'failed to extract rounding value');
+                    }
+                }
+                // Check for "UNIT RATE" label
+                if (labelText.toUpperCase().includes('UNIT RATE')) {
+                    const value = extractKatexValue(token);
+                    if (value) {
+                        const evaluated = evaluateMathExpression(value);
+                        if (evaluated !== null) {
+                            this.log('token', i, 'extracted UNIT RATE:', value, '=', evaluated);
+                            tokens.push({
+                                index: i,
+                                element: token,
+                                rawValue: value,
+                                numericValue: evaluated,
+                                isUnitRate: true,
+                            });
+                            continue;
+                        }
                     }
                 }
             }
@@ -285,6 +307,23 @@ export class MatchPairsSolver extends BaseSolver {
                         });
                         continue;
                     }
+                }
+
+                // Check if this is a linear equation (y = mx or y = mx + b)
+                const equationCoefficient = this.extractEquationCoefficient(value);
+                if (equationCoefficient !== null) {
+                    this.log('token', i, 'extracted equation coefficient:', value, '→', equationCoefficient);
+                    tokens.push({
+                        index: i,
+                        element: token,
+                        rawValue: value,
+                        numericValue: equationCoefficient,
+                        isEquation: true,
+                        equationCoefficient,
+                        isExpression: true,
+                        isPieChart: false,
+                    });
+                    continue;
                 }
 
                 const evaluated = evaluateMathExpression(value);
@@ -397,8 +436,10 @@ export class MatchPairsSolver extends BaseSolver {
         const blockDiagrams = tokens.filter(t => t.isBlockDiagram && !t.isRoundingTarget);
         const roundingTargets = tokens.filter(t => t.isRoundingTarget);
         const factorsLists = tokens.filter(t => t.isFactorsList);
+        const equations = tokens.filter(t => t.isEquation);
+        const unitRates = tokens.filter(t => t.isUnitRate);
         const numbers = tokens.filter(
-            t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget && !t.isFactorsList,
+            t => !t.isPieChart && !t.isBlockDiagram && !t.isRoundingTarget && !t.isFactorsList && !t.isEquation && !t.isUnitRate,
         );
 
         this.log(
@@ -406,6 +447,8 @@ export class MatchPairsSolver extends BaseSolver {
             'pieCharts:', pieCharts.length,
             'roundingTargets:', roundingTargets.length,
             'factorsLists:', factorsLists.length,
+            'equations:', equations.length,
+            'unitRates:', unitRates.length,
             'numbers:', numbers.length,
         );
 
@@ -413,19 +456,23 @@ export class MatchPairsSolver extends BaseSolver {
         if (this.hasNearestRounding && roundingTargets.length > 0) {
             this.matchRounding(tokens, roundingTargets, pairs, usedIndices);
         }
-        // MODE 2: Block diagram matching (blocks to numbers with same value)
+        // MODE 2: Equation to Unit Rate matching (equations like y=5x with unit rate values)
+        else if (equations.length > 0 && unitRates.length > 0) {
+            this.matchEquationsToUnitRates(equations, unitRates, pairs, usedIndices);
+        }
+        // MODE 3: Block diagram matching (blocks to numbers with same value)
         else if (blockDiagrams.length > 0 && numbers.length > 0) {
             this.matchBlockDiagrams(blockDiagrams, numbers, pairs, usedIndices);
         }
-        // MODE 3: Factors matching (numbers to their factors lists)
+        // MODE 4: Factors matching (numbers to their factors lists)
         else if (factorsLists.length > 0 && numbers.length > 0) {
             this.matchFactors(factorsLists, numbers, pairs, usedIndices);
         }
-        // MODE 4: Pie chart matching
+        // MODE 5: Pie chart matching
         else if (pieCharts.length > 0 && numbers.length > 0) {
             this.matchPieCharts(pieCharts, numbers, pairs, usedIndices);
         }
-        // MODE 5: Expression matching
+        // MODE 6: Expression matching
         else {
             this.matchExpressions(tokens, pairs, usedIndices);
         }
@@ -667,6 +714,106 @@ export class MatchPairsSolver extends BaseSolver {
             // Fallback: match any tokens with same numeric value
             this.matchFallback(tokens, pairs, usedIndices);
         }
+    }
+
+    /**
+     * Извлекает коэффициент из линейного уравнения вида y = mx или y = mx + b
+     * Поддерживает дроби: y = (2/3)x, y = \frac{2}{3}x
+     */
+    private extractEquationCoefficient(equation: string): number | null {
+        // Clean LaTeX
+        let cleaned = cleanLatexWrappers(equation);
+        cleaned = convertLatexOperators(cleaned);
+        cleaned = convertLatexFractions(cleaned);
+        cleaned = cleaned.replace(/\s+/g, '');
+
+        // Pattern 1: y = mx (simple number coefficient)
+        // Pattern: y = (number)x or y = -(number)x
+        let match = cleaned.match(/^y=(-?\d+\.?\d*)x$/);
+        if (match && match[1] !== undefined) {
+            const m = parseFloat(match[1]);
+            if (!Number.isNaN(m)) {
+                return m;
+            }
+        }
+
+        // Pattern 2: y = (fraction)x or y = (a/b)x
+        // First try to match y = (expression)x where expression can be evaluated
+        match = cleaned.match(/^y=(.+?)x$/);
+        if (match && match[1] !== undefined) {
+            const coefficientExpr = match[1];
+            // Remove outer parentheses if present
+            const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+            const evaluated = evaluateMathExpression(cleanedCoeff);
+            if (evaluated !== null) {
+                return evaluated;
+            }
+        }
+
+        // Pattern 3: y = mx + b or y = mx - b
+        match = cleaned.match(/^y=(-?\d+\.?\d*)x[+-](-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined) {
+            const m = parseFloat(match[1]);
+            if (!Number.isNaN(m)) {
+                return m; // Return coefficient, ignore b for matching purposes
+            }
+        }
+
+        // Pattern 4: y = (fraction)x + b
+        match = cleaned.match(/^y=(.+?)x[+-](-?\d+\.?\d*)$/);
+        if (match && match[1] !== undefined) {
+            const coefficientExpr = match[1];
+            const cleanedCoeff = coefficientExpr.replace(/^\((.+)\)$/, '$1');
+            const evaluated = evaluateMathExpression(cleanedCoeff);
+            if (evaluated !== null) {
+                return evaluated;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Сопоставляет уравнения (y = mx) с unit rate значениями
+     */
+    private matchEquationsToUnitRates(
+        equations: IToken[],
+        unitRates: IToken[],
+        pairs: { first: IToken; second: IToken }[],
+        usedIndices: Set<number>,
+    ): void {
+        this.log('matchEquationsToUnitRates: comparing', equations.length, 'equations with', unitRates.length, 'unit rates');
+
+        for (const equation of equations) {
+            if (usedIndices.has(equation.index) || equation.equationCoefficient === undefined) continue;
+
+            const coeff = equation.equationCoefficient;
+
+            for (const unitRate of unitRates) {
+                if (usedIndices.has(unitRate.index) || unitRate.numericValue === null) continue;
+
+                // Match coefficient with unit rate value (with tolerance for floating point)
+                if (Math.abs(coeff - unitRate.numericValue) < 0.0001) {
+                    pairs.push({ first: equation, second: unitRate });
+                    usedIndices.add(equation.index);
+                    usedIndices.add(unitRate.index);
+                    this.log(
+                        'found equation-unitRate pair:',
+                        equation.rawValue,
+                        '(coeff:',
+                        coeff,
+                        ') ↔',
+                        unitRate.rawValue,
+                        '(value:',
+                        unitRate.numericValue,
+                        ')',
+                    );
+                    break;
+                }
+            }
+        }
+
+        this.log('matchEquationsToUnitRates: found', pairs.length, 'pairs');
     }
 
     private matchFallback(
