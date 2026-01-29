@@ -8,6 +8,8 @@ import type { IChallengeContext, ISolverResult } from '../types';
 import { extractKatexValue } from '../parsers/KatexParser';
 import { evaluateMathExpression } from '../math/expressions';
 import { SELECTORS } from '../dom/selectors';
+import { extractGridFraction, isGridDiagram } from '../parsers/GridParser';
+import { extractBlockDiagramValue, isBlockDiagram } from '../parsers/BlockDiagramParser';
 
 interface IPatternTableResult extends ISolverResult {
     type: 'patternTable';
@@ -109,27 +111,71 @@ export class PatternTableSolver extends BaseSolver {
         for (let i = 0; i < choices.length; i++) {
             const choice = choices[i];
             if (!choice) continue;
+
+            // First, try to extract KaTeX value
             const choiceValue = extractKatexValue(choice);
-            this.logDebug('choice', i, '- value:', choiceValue);
+            this.logDebug('choice', i, '- KaTeX value:', choiceValue);
 
-            if (choiceValue === null) continue;
+            if (choiceValue !== null) {
+                // Extract number from choice value
+                // Handles formats like: "9", "X=9", "X = 9", "9.5", "-5", etc.
+                const numberMatch = choiceValue.match(/(-?\d+\.?\d*)/);
+                if (numberMatch && numberMatch[1]) {
+                    const choiceNum = parseFloat(numberMatch[1]);
+                    if (!isNaN(choiceNum) && choiceNum === answer) {
+                        this.log('found matching choice at index', i);
+                        return i;
+                    }
+                }
 
-            // Extract number from choice value
-            // Handles formats like: "9", "X=9", "X = 9", "9.5", "-5", etc.
-            const numberMatch = choiceValue.match(/(-?\d+\.?\d*)/);
-            if (numberMatch && numberMatch[1]) {
-                const choiceNum = parseFloat(numberMatch[1]);
+                // Fallback: try parsing the whole string as a number
+                const choiceNum = parseFloat(choiceValue);
                 if (!isNaN(choiceNum) && choiceNum === answer) {
                     this.log('found matching choice at index', i);
                     return i;
                 }
             }
 
-            // Fallback: try parsing the whole string as a number
-            const choiceNum = parseFloat(choiceValue);
-            if (!isNaN(choiceNum) && choiceNum === answer) {
-                this.log('found matching choice at index', i);
-                return i;
+            // If no KaTeX, try to extract value from grid/block diagram in iframe
+            const iframe = choice.querySelector('iframe');
+            if (iframe) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc) {
+                    let diagramValue: number | null = null;
+
+                    // Check for grid diagram
+                    if (isGridDiagram(srcdoc)) {
+                        const gridFraction = extractGridFraction(srcdoc);
+                        if (gridFraction) {
+                            diagramValue = gridFraction.numerator / gridFraction.denominator;
+                            this.logDebug(
+                                'choice',
+                                i,
+                                '- grid diagram:',
+                                `${gridFraction.numerator}/${gridFraction.denominator}`,
+                                '=',
+                                diagramValue,
+                            );
+                        }
+                    }
+                    // Check for block diagram
+                    else if (isBlockDiagram(srcdoc)) {
+                        const blockValue = extractBlockDiagramValue(srcdoc);
+                        // Block diagrams represent counts (e.g., 4 blocks = 0.04)
+                        // So divide by 100 to get decimal fraction
+                        diagramValue = blockValue !== null ? blockValue / 100 : null;
+                        this.logDebug('choice', i, '- block diagram value:', diagramValue);
+                    }
+
+                    if (diagramValue !== null) {
+                        // Compare with tolerance for floating point
+                        const diff = Math.abs(diagramValue - answer);
+                        if (diff < 0.0001) {
+                            this.log('found matching choice at index', i, 'diagram value:', diagramValue);
+                            return i;
+                        }
+                    }
+                }
             }
         }
 
