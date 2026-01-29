@@ -63,6 +63,21 @@ describe('BlockDiagramParser', () => {
             `;
             expect(extractBlockDiagramValue(svgBothModes)).toBe(2);
         });
+
+        it('should return null for pie charts (ignore circles)', () => {
+            // Pie charts have <circle> elements - should be ignored by block diagram parser
+            const pieChartSvg = `
+                <span class="dark-img">
+                    <svg>
+                        <circle cx="100" cy="100" r="98" fill="#F7F7F7" stroke="#37464F"/>
+                        <path d="M2 100C2 74 12 49 30 30L100 100Z" fill="#49C0F8" stroke="#1899D6"/>
+                        <path d="M100 2C112 2 125 4 137 9L100 100V2Z" fill="#49C0F8" stroke="#1899D6"/>
+                    </svg>
+                </span>
+            `;
+            // Even though it has colored paths, it should return null because of the circle
+            expect(extractBlockDiagramValue(pieChartSvg)).toBeNull();
+        });
     });
 
     describe('isBlockDiagram', () => {

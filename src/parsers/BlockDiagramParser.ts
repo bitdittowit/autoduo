@@ -92,6 +92,13 @@ export function extractBlockDiagramValue(srcdoc: string): number | null {
 
     const svgContent = extractSvgContent(srcdoc);
 
+    // IMPORTANT: Exclude pie charts (they have <circle> elements)
+    // Pie charts also have colored paths, but they're circles, not block diagrams
+    if (svgContent.includes('<circle')) {
+        logger.debug('extractBlockDiagramValue: skipping - detected circle (pie chart)');
+        return null;
+    }
+
     // Count "hundred block" structures first
     const hundredBlocks = countHundredBlocks(svgContent);
     if (hundredBlocks > 0) {
