@@ -23,6 +23,7 @@ export { BlockDiagramTextInputSolver } from './BlockDiagramTextInputSolver';
 export { SolveForXSolver } from './SolveForXSolver';
 export { FractionToDecimalChoiceSolver } from './FractionToDecimalChoiceSolver';
 export { RatioChoiceSolver } from './RatioChoiceSolver';
+export { TableFillSolver } from './TableFillSolver';
 
 // Re-export types
 export type { ISolver, ISolverResult, IChallengeContext } from '../types';

@@ -41,23 +41,13 @@ export class RatioChoiceSolver extends BaseSolver {
             return false;
         }
 
-        // Should have choices with iframes (visual diagrams)
+        // Should have choices (text or visual)
         const choices = context.container.querySelectorAll(SELECTORS.CHALLENGE_CHOICE);
         if (choices.length < 2) {
             return false;
         }
 
-        // At least one choice should have an iframe (visual diagram)
-        let hasVisualChoice = false;
-        for (const choice of choices) {
-            const iframe = choice.querySelector('iframe');
-            if (iframe) {
-                hasVisualChoice = true;
-                break;
-            }
-        }
-
-        return hasVisualChoice;
+        return true;
     }
 
     /**
@@ -134,14 +124,14 @@ export class RatioChoiceSolver extends BaseSolver {
             if (hasQuestion) {
                 // Extract ratio from left cell
                 const value = extractKatexValue(leftCell);
-                this.logDebug('found question cell, left cell ratio:', value);
+                this.log('found question cell, left cell ratio:', value);
                 if (value && value.includes(':')) {
                     return value;
                 }
             }
         }
 
-        this.logDebug('no target ratio found in cells');
+        this.log('no target ratio found in cells');
         return null;
     }
 
@@ -177,23 +167,37 @@ export class RatioChoiceSolver extends BaseSolver {
             const choice = choices[i];
             if (!choice) continue;
 
+            let choiceParts: [number, number] | null = null;
+
+            // Try to parse visual diagram from iframe
             const iframe = choice.querySelector('iframe');
-            if (!iframe) continue;
+            if (iframe) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (srcdoc) {
+                    choiceParts = this.countBlocksInDiagram(srcdoc);
+                }
+            }
 
-            const srcdoc = iframe.getAttribute('srcdoc');
-            if (!srcdoc) continue;
+            // If no iframe or failed to parse, try text ratio
+            if (!choiceParts) {
+                const ratioText = extractKatexValue(choice);
+                if (ratioText && ratioText.includes(':')) {
+                    choiceParts = this.parseRatio(ratioText);
+                }
+            }
 
-            // Count blocks in the visual diagram
-            const counts = this.countBlocksInDiagram(srcdoc);
-            if (!counts) continue;
+            if (!choiceParts) {
+                this.log('choice', i, 'failed to parse ratio');
+                continue;
+            }
 
-            this.logDebug(
+            this.log(
                 'choice',
                 i,
-                'has blocks:',
-                counts[0],
+                'has ratio:',
+                choiceParts[0],
                 ':',
-                counts[1],
+                choiceParts[1],
                 '(target:',
                 targetParts[0],
                 ':',
@@ -202,7 +206,7 @@ export class RatioChoiceSolver extends BaseSolver {
             );
 
             // Check if ratio matches
-            if (counts[0] === targetParts[0] && counts[1] === targetParts[1]) {
+            if (choiceParts[0] === targetParts[0] && choiceParts[1] === targetParts[1]) {
                 this.log('found matching choice:', i);
                 return i;
             }
@@ -217,13 +221,28 @@ export class RatioChoiceSolver extends BaseSolver {
      */
     private countBlocksInDiagram(srcdoc: string): [number, number] | null {
         try {
-            // Count <rect> elements (squares/rectangles)
-            const rectMatches = srcdoc.match(/<rect\s[^>]*>/g);
+            // Extract only the first SVG (to avoid counting twice for light/dark themes)
+            // Look for the first <g id="id0:id0"> section (rectangles) and <g id="id1:id1"> (paths)
+            const id0Match = srcdoc.match(/<g id="id0:id0"[^>]*>([\s\S]*?)<\/g>/);
+            const id1Match = srcdoc.match(/<g id="id1:id1"[^>]*>([\s\S]*?)<\/g>/);
+
+            if (!id0Match || !id1Match) {
+                this.log('could not find id0:id0 or id1:id1 groups');
+                return null;
+            }
+
+            const rectSection = id0Match[1] || '';
+            const pathSection = id1Match[1] || '';
+
+            // Count <rect> elements in id0:id0 group
+            const rectMatches = rectSection.match(/<rect\s[^>]*\/?>/g);
             const rectCount = rectMatches ? rectMatches.length : 0;
 
-            // Count <path> elements (triangles/other shapes)
-            const pathMatches = srcdoc.match(/<path\s[^>]*d="[^"]*"/g);
+            // Count <path> elements in id1:id1 group
+            const pathMatches = pathSection.match(/<path\s[^>]*\/?>/g);
             const pathCount = pathMatches ? pathMatches.length : 0;
+
+            this.log('counted shapes:', rectCount, 'rects,', pathCount, 'paths');
 
             // If we found both types, return the counts
             if (rectCount > 0 || pathCount > 0) {
@@ -232,7 +251,7 @@ export class RatioChoiceSolver extends BaseSolver {
 
             return null;
         } catch (error) {
-            this.logDebug('error counting blocks:', error);
+            this.log('error counting blocks:', error);
             return null;
         }
     }

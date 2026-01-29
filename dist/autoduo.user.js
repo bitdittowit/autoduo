@@ -6621,21 +6621,12 @@ var AutoDuo = (function (exports) {
             if (cells.length < 4) {
                 return false;
             }
-            // Should have choices with iframes (visual diagrams)
+            // Should have choices (text or visual)
             const choices = context.container.querySelectorAll(SELECTORS.CHALLENGE_CHOICE);
             if (choices.length < 2) {
                 return false;
             }
-            // At least one choice should have an iframe (visual diagram)
-            let hasVisualChoice = false;
-            for (const choice of choices) {
-                const iframe = choice.querySelector('iframe');
-                if (iframe) {
-                    hasVisualChoice = true;
-                    break;
-                }
-            }
-            return hasVisualChoice;
+            return true;
         }
         /**
          * Solves the challenge
@@ -6695,13 +6686,13 @@ var AutoDuo = (function (exports) {
                 if (hasQuestion) {
                     // Extract ratio from left cell
                     const value = extractKatexValue(leftCell);
-                    this.logDebug('found question cell, left cell ratio:', value);
+                    this.log('found question cell, left cell ratio:', value);
                     if (value && value.includes(':')) {
                         return value;
                     }
                 }
             }
-            this.logDebug('no target ratio found in cells');
+            this.log('no target ratio found in cells');
             return null;
         }
         /**
@@ -6728,19 +6719,29 @@ var AutoDuo = (function (exports) {
                 const choice = choices[i];
                 if (!choice)
                     continue;
+                let choiceParts = null;
+                // Try to parse visual diagram from iframe
                 const iframe = choice.querySelector('iframe');
-                if (!iframe)
+                if (iframe) {
+                    const srcdoc = iframe.getAttribute('srcdoc');
+                    if (srcdoc) {
+                        choiceParts = this.countBlocksInDiagram(srcdoc);
+                    }
+                }
+                // If no iframe or failed to parse, try text ratio
+                if (!choiceParts) {
+                    const ratioText = extractKatexValue(choice);
+                    if (ratioText && ratioText.includes(':')) {
+                        choiceParts = this.parseRatio(ratioText);
+                    }
+                }
+                if (!choiceParts) {
+                    this.log('choice', i, 'failed to parse ratio');
                     continue;
-                const srcdoc = iframe.getAttribute('srcdoc');
-                if (!srcdoc)
-                    continue;
-                // Count blocks in the visual diagram
-                const counts = this.countBlocksInDiagram(srcdoc);
-                if (!counts)
-                    continue;
-                this.logDebug('choice', i, 'has blocks:', counts[0], ':', counts[1], '(target:', targetParts[0], ':', targetParts[1], ')');
+                }
+                this.log('choice', i, 'has ratio:', choiceParts[0], ':', choiceParts[1], '(target:', targetParts[0], ':', targetParts[1], ')');
                 // Check if ratio matches
-                if (counts[0] === targetParts[0] && counts[1] === targetParts[1]) {
+                if (choiceParts[0] === targetParts[0] && choiceParts[1] === targetParts[1]) {
                     this.log('found matching choice:', i);
                     return i;
                 }
@@ -6753,12 +6754,23 @@ var AutoDuo = (function (exports) {
          */
         countBlocksInDiagram(srcdoc) {
             try {
-                // Count <rect> elements (squares/rectangles)
-                const rectMatches = srcdoc.match(/<rect\s[^>]*>/g);
+                // Extract only the first SVG (to avoid counting twice for light/dark themes)
+                // Look for the first <g id="id0:id0"> section (rectangles) and <g id="id1:id1"> (paths)
+                const id0Match = srcdoc.match(/<g id="id0:id0"[^>]*>([\s\S]*?)<\/g>/);
+                const id1Match = srcdoc.match(/<g id="id1:id1"[^>]*>([\s\S]*?)<\/g>/);
+                if (!id0Match || !id1Match) {
+                    this.log('could not find id0:id0 or id1:id1 groups');
+                    return null;
+                }
+                const rectSection = id0Match[1] || '';
+                const pathSection = id1Match[1] || '';
+                // Count <rect> elements in id0:id0 group
+                const rectMatches = rectSection.match(/<rect\s[^>]*\/?>/g);
                 const rectCount = rectMatches ? rectMatches.length : 0;
-                // Count <path> elements (triangles/other shapes)
-                const pathMatches = srcdoc.match(/<path\s[^>]*d="[^"]*"/g);
+                // Count <path> elements in id1:id1 group
+                const pathMatches = pathSection.match(/<path\s[^>]*\/?>/g);
                 const pathCount = pathMatches ? pathMatches.length : 0;
+                this.log('counted shapes:', rectCount, 'rects,', pathCount, 'paths');
                 // If we found both types, return the counts
                 if (rectCount > 0 || pathCount > 0) {
                     return [rectCount, pathCount];
@@ -6766,8 +6778,273 @@ var AutoDuo = (function (exports) {
                 return null;
             }
             catch (error) {
-                this.logDebug('error counting blocks:', error);
+                this.log('error counting blocks:', error);
                 return null;
+            }
+        }
+    }
+
+    /**
+     * Солвер для заполнения таблиц по уравнению
+     * Работает с Table компонентом в iframe
+     * Пример: заполнить таблицу для уравнения y = 2x
+     */
+    /**
+     * Парсит линейное уравнение вида y = mx или y = mx + b
+     * @param equation - уравнение в формате LaTeX или текста
+     * @returns объект с коэффициентом m и константой b, или null
+     */
+    function parseLinearEquation(equation) {
+        // Clean LaTeX
+        let cleaned = cleanLatexWrappers(equation);
+        cleaned = convertLatexOperators(cleaned);
+        cleaned = cleaned.replace(/\s+/g, '');
+        // Pattern: y = mx or y = mx + b or y = mx - b
+        // Match: y = (number)x or y = (number)x + (number) or y = (number)x - (number)
+        const patterns = [
+            /^y=(-?\d+\.?\d*)x$/, // y = 2x or y = -3x
+            /^y=(-?\d+\.?\d*)x\+(-?\d+\.?\d*)$/, // y = 2x + 3
+            /^y=(-?\d+\.?\d*)x-(-?\d+\.?\d*)$/, // y = 2x - 3
+        ];
+        for (const pattern of patterns) {
+            const match = cleaned.match(pattern);
+            if (match && match[1] !== undefined) {
+                const m = parseFloat(match[1]);
+                const b = match[2] !== undefined
+                    ? pattern === patterns[1]
+                        ? parseFloat(match[2])
+                        : -parseFloat(match[2])
+                    : 0;
+                if (!Number.isNaN(m)) {
+                    return { m, b };
+                }
+            }
+        }
+        return null;
+    }
+    class TableFillSolver extends BaseSolver {
+        name = 'TableFillSolver';
+        canSolve(context) {
+            // Check for iframe with Table component
+            const allIframes = findAllIframes(context.container);
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            for (const iframe of combinedIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    continue;
+                // Check for Table component
+                if (srcdoc.includes('new Table') || srcdoc.includes('Table({')) {
+                    this.log('found Table component in iframe');
+                    return true;
+                }
+            }
+            return false;
+        }
+        solve(context) {
+            this.log('starting');
+            // Find the table iframe
+            const allIframes = findAllIframes(context.container);
+            const allIframesFallback = context.container.querySelectorAll('iframe');
+            const combinedIframes = Array.from(new Set([...allIframes, ...allIframesFallback]));
+            let tableIframe = null;
+            for (const iframe of combinedIframes) {
+                const srcdoc = iframe.getAttribute('srcdoc');
+                if (!srcdoc)
+                    continue;
+                if (srcdoc.includes('new Table') || srcdoc.includes('Table({')) {
+                    tableIframe = iframe;
+                    break;
+                }
+            }
+            if (!tableIframe) {
+                return this.failure('tableFill', 'No table iframe found');
+            }
+            // Extract equation from KaTeX annotations
+            const equation = this.extractEquation(context);
+            if (!equation) {
+                return this.failure('tableFill', 'Could not extract equation');
+            }
+            this.log('extracted equation:', equation);
+            // Parse the equation
+            const parsed = parseLinearEquation(equation);
+            if (!parsed) {
+                return this.failure('tableFill', `Could not parse equation: ${equation}`);
+            }
+            this.log('parsed equation: y =', parsed.m, 'x +', parsed.b);
+            // Access iframe window
+            const iframeWindow = tableIframe.contentWindow;
+            if (!iframeWindow) {
+                return this.failure('tableFill', 'Could not access iframe window');
+            }
+            // Try to access INPUT_VARIABLES from srcdoc first (more reliable)
+            const srcdoc = tableIframe.getAttribute('srcdoc') || '';
+            let data = null;
+            let tokens = null;
+            // Extract INPUT_VARIABLES from srcdoc
+            // Format: const INPUT_VARIABLES = {"data": [[-4, null], ...], "tokens": [-8, -4, ...]};
+            const inputVarsMatch = srcdoc.match(/INPUT_VARIABLES\s*=\s*(\{[^;]+\})/);
+            if (inputVarsMatch && inputVarsMatch[1] !== undefined) {
+                try {
+                    const jsonStr = inputVarsMatch[1];
+                    if (!jsonStr) {
+                        throw new Error('Empty JSON string');
+                    }
+                    const parsedVars = JSON.parse(jsonStr);
+                    if (parsedVars.data && parsedVars.tokens) {
+                        data = parsedVars.data;
+                        tokens = parsedVars.tokens;
+                        this.log('extracted data from srcdoc:', data, tokens);
+                    }
+                }
+                catch {
+                    this.logDebug('could not parse INPUT_VARIABLES from srcdoc, trying iframe window');
+                }
+            }
+            // Fallback: try to get from iframe window
+            if (!data || !tokens) {
+                const inputVars = iframeWindow.INPUT_VARIABLES;
+                const diagram = iframeWindow.diagram;
+                data = inputVars?.data || diagram?.variables?.data || null;
+                tokens = inputVars?.tokens || diagram?.variables?.tokens || null;
+            }
+            if (!data || !tokens) {
+                return this.failure('tableFill', 'Could not access table data or tokens');
+            }
+            // Try to get table from diagram.table or window.diagram.table
+            // According to transcript, table is stored at window.diagram.table
+            let table = iframeWindow.diagram?.table;
+            if (!table) {
+                // Fallback: try accessing via window property directly
+                const windowWithDiagram = iframeWindow;
+                table = windowWithDiagram.diagram?.table;
+            }
+            if (!table || !table.setCellValue) {
+                return this.failure('tableFill', 'Could not access table.setCellValue. Table may not be initialized yet.');
+            }
+            this.log('table data:', data);
+            this.log('available tokens:', tokens);
+            // Calculate missing values and fill the table
+            let filledCells = 0;
+            const renderNumber = iframeWindow.renderNumber || ((v) => String(v));
+            for (let rowIndex = 0; rowIndex < data.length; rowIndex++) {
+                const row = data[rowIndex];
+                if (!row || row.length < 2)
+                    continue;
+                const x = row[0];
+                const y = row[1];
+                // If y is null, calculate it
+                if (x !== null && x !== undefined && y === null) {
+                    const calculatedY = parsed.m * x + parsed.b;
+                    this.log(`row ${rowIndex}: x = ${x}, calculated y = ${calculatedY}`);
+                    // Find the token element that matches calculatedY
+                    const tokenValue = tokens.find((t) => Math.abs(t - calculatedY) < 0.001);
+                    if (tokenValue === undefined) {
+                        this.logError(`could not find token for value ${calculatedY}`);
+                        continue;
+                    }
+                    // Set the cell value (column 1 is y)
+                    const renderedValue = renderNumber(tokenValue);
+                    try {
+                        // Try to find token element (might be required for drag-and-drop)
+                        const tokenElement = this.findTokenElement(iframeWindow, tokenValue);
+                        // Try with token element first, then without
+                        if (tokenElement) {
+                            table.setCellValue(rowIndex, 1, renderedValue, tokenElement);
+                        }
+                        else {
+                            // Try without token element (might work for direct value setting)
+                            table.setCellValue(rowIndex, 1, renderedValue);
+                        }
+                        filledCells++;
+                        this.log(`filled cell [${rowIndex}, 1] with value ${renderedValue}`);
+                    }
+                    catch (e) {
+                        this.logError('error setting cell value:', e);
+                    }
+                }
+            }
+            if (filledCells === 0) {
+                return this.failure('tableFill', 'No cells were filled');
+            }
+            // Trigger update callbacks
+            this.triggerUpdateCallbacks(iframeWindow);
+            return {
+                type: 'tableFill',
+                success: true,
+                equation,
+                filledCells,
+            };
+        }
+        extractEquation(context) {
+            // Look for equation in KaTeX annotations
+            const annotations = context.container.querySelectorAll('annotation');
+            for (const annotation of annotations) {
+                const text = annotation.textContent;
+                if (!text)
+                    continue;
+                // Check if it looks like an equation (y = ...)
+                if (text.includes('y') && text.includes('=') && text.includes('x')) {
+                    const katexValue = extractKatexValue(annotation.parentElement);
+                    if (katexValue) {
+                        return katexValue;
+                    }
+                }
+            }
+            // Also check equation container
+            if (context.equationContainer) {
+                const katexValue = extractKatexValue(context.equationContainer);
+                if (katexValue && katexValue.includes('y') && katexValue.includes('=') && katexValue.includes('x')) {
+                    return katexValue;
+                }
+            }
+            return null;
+        }
+        findTokenElement(iframeWindow, value) {
+            try {
+                const iframeDoc = iframeWindow.document;
+                if (!iframeDoc)
+                    return null;
+                // Tokens are typically in a container, look for elements with the rendered value
+                const renderNumber = iframeWindow.renderNumber || ((v) => String(v));
+                const renderedValue = renderNumber(value);
+                // Try to find token by text content
+                const allElements = iframeDoc.querySelectorAll('*');
+                for (const el of allElements) {
+                    if (el.textContent?.trim() === renderedValue || el.textContent?.includes(renderedValue)) {
+                        // Check if it's draggable or looks like a token
+                        if (el.getAttribute('draggable') === 'true' ||
+                            el.classList.contains('token') ||
+                            el.getAttribute('role') === 'button') {
+                            return el;
+                        }
+                    }
+                }
+                // Fallback: look for elements with data attributes or specific classes
+                const tokenContainers = iframeDoc.querySelectorAll('[class*="token"], [data-token]');
+                for (const container of tokenContainers) {
+                    if (container.textContent?.includes(renderedValue)) {
+                        return container;
+                    }
+                }
+            }
+            catch (e) {
+                this.logError('error finding token element:', e);
+            }
+            return null;
+        }
+        triggerUpdateCallbacks(iframeWindow) {
+            try {
+                // Trigger any update callbacks that might be needed
+                if (iframeWindow.diagram?.table) {
+                    // The table's addUpdateSubscriber should handle updates automatically
+                    // but we can trigger a manual update if needed
+                    const event = new Event('input', { bubbles: true });
+                    iframeWindow.document.dispatchEvent(event);
+                }
+            }
+            catch (e) {
+                this.logError('error triggering update callbacks:', e);
             }
         }
     }
@@ -6827,6 +7104,7 @@ var AutoDuo = (function (exports) {
             // Interactive iframe solvers (most specific)
             // Note: InteractiveSliderSolver must be BEFORE ExpressionBuildSolver
             // because NumberLine sliders may contain "ExpressionBuild" in their iframe code
+            this.register(new TableFillSolver()); // Must be before InteractiveSliderSolver (Table might contain NumberLine)
             this.register(new InteractiveSliderSolver());
             this.register(new ExpressionBuildSolver());
             this.register(new InteractiveSpinnerSolver());
@@ -7447,6 +7725,7 @@ var AutoDuo = (function (exports) {
     exports.SelectPieChartSolver = SelectPieChartSolver;
     exports.SolveForXSolver = SolveForXSolver;
     exports.SolverRegistry = SolverRegistry;
+    exports.TableFillSolver = TableFillSolver;
     exports.TypeAnswerSolver = TypeAnswerSolver;
     exports.addFractions = addFractions;
     exports.areFractionsEqual = areFractionsEqual;

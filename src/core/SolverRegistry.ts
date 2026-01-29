@@ -31,6 +31,7 @@ import { BlockDiagramTextInputSolver } from '../solvers/BlockDiagramTextInputSol
 import { SolveForXSolver } from '../solvers/SolveForXSolver';
 import { FractionToDecimalChoiceSolver } from '../solvers/FractionToDecimalChoiceSolver';
 import { RatioChoiceSolver } from '../solvers/RatioChoiceSolver';
+import { TableFillSolver } from '../solvers/TableFillSolver';
 
 /**
  * Регистр солверов - выбирает подходящий солвер для задания
@@ -89,6 +90,7 @@ export class SolverRegistry {
         // Interactive iframe solvers (most specific)
         // Note: InteractiveSliderSolver must be BEFORE ExpressionBuildSolver
         // because NumberLine sliders may contain "ExpressionBuild" in their iframe code
+        this.register(new TableFillSolver()); // Must be before InteractiveSliderSolver (Table might contain NumberLine)
         this.register(new InteractiveSliderSolver());
         this.register(new ExpressionBuildSolver());
         this.register(new InteractiveSpinnerSolver());
