@@ -8,6 +8,7 @@ import type { IChallengeContext, ISolverResult } from '../types';
 import { extractKatexValue } from '../parsers/KatexParser';
 import { extractPieChartFraction } from '../parsers/PieChartParser';
 import { extractBlockDiagramValue, isBlockDiagram } from '../parsers/BlockDiagramParser';
+import { extractGridFraction, isGridDiagram } from '../parsers/GridParser';
 import { evaluateMathExpression } from '../math/expressions';
 import { roundToNearest } from '../math/rounding';
 import { findAllIframes } from '../dom/selectors';
@@ -200,14 +201,14 @@ export class MatchPairsSolver extends BaseSolver {
                 }
             }
 
-            // Check for iframe with block diagram or pie chart
+            // Check for iframe with block diagram, grid, or pie chart
             const iframe = token.querySelector<HTMLIFrameElement>(
                 'iframe[title="Math Web Element"]',
             );
             if (iframe && !nearestLabel) {
                 const srcdoc = iframe.getAttribute('srcdoc');
                 if (srcdoc?.includes('<svg')) {
-                    // First check for block diagram (has rect elements)
+                    // First check for block diagram (columns of blocks)
                     if (isBlockDiagram(srcdoc)) {
                         const blockCount = extractBlockDiagramValue(srcdoc);
                         if (blockCount !== null) {
@@ -218,6 +219,22 @@ export class MatchPairsSolver extends BaseSolver {
                                 rawValue: `${blockCount} blocks`,
                                 numericValue: blockCount,
                                 isBlockDiagram: true,
+                            });
+                            continue;
+                        }
+                    }
+
+                    // Then check for grid diagram (grid of cells)
+                    if (isGridDiagram(srcdoc)) {
+                        const gridFraction = extractGridFraction(srcdoc);
+                        if (gridFraction) {
+                            this.log('token', i, 'extracted grid diagram:', gridFraction.value);
+                            tokens.push({
+                                index: i,
+                                element: token,
+                                rawValue: `${gridFraction.numerator}/${gridFraction.denominator} (grid)`,
+                                numericValue: gridFraction.value,
+                                isPieChart: true, // Treat as visual fraction
                             });
                             continue;
                         }

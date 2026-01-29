@@ -37,3 +37,9 @@ export {
     extractPieChartFraction,
     isPieChart,
 } from './PieChartParser';
+
+// Grid diagram parser
+export {
+    extractGridFraction,
+    isGridDiagram,
+} from './GridParser';

@@ -827,7 +827,7 @@ var AutoDuo = (function (exports) {
     /**
      * Извлекает часть SVG для анализа (предпочитает dark-img)
      */
-    function extractSvgContent$1(srcdoc) {
+    function extractSvgContent$2(srcdoc) {
         // Prefer dark-img since Duolingo Math often uses dark theme
         const darkImgMatch = srcdoc.match(/<span class="dark-img">([\s\S]*?)<\/span>/);
         if (darkImgMatch?.[1]) {
@@ -897,7 +897,7 @@ var AutoDuo = (function (exports) {
     function extractBlockDiagramValue(srcdoc) {
         if (!srcdoc)
             return null;
-        const svgContent = extractSvgContent$1(srcdoc);
+        const svgContent = extractSvgContent$2(srcdoc);
         // IMPORTANT: Exclude pie charts (they have <circle> elements)
         // Pie charts also have colored paths, but they're circles, not block diagrams
         if (svgContent.includes('<circle')) {
@@ -3245,7 +3245,7 @@ var AutoDuo = (function (exports) {
     /**
      * Извлекает часть SVG для анализа (предпочитает dark-img)
      */
-    function extractSvgContent(svgContent) {
+    function extractSvgContent$1(svgContent) {
         // Try to extract just the dark mode SVG
         const darkImgMatch = svgContent.match(/<span class="dark-img">([\s\S]*?)<\/span>/);
         if (darkImgMatch?.[1]) {
@@ -3334,6 +3334,38 @@ var AutoDuo = (function (exports) {
         return null;
     }
     /**
+     * Метод 3: Анализ секторных путей (pie chart без <circle> элемента)
+     * Используется для круговых диаграмм, нарисованных только path-элементами
+     */
+    function extractBySectorPaths(svgContent) {
+        // Look for paths that form pie sectors (go to center point, typically L100 100)
+        const allPathsPattern = /<path[^>]*d="[^"]*"[^>]*>/g;
+        const allPaths = svgContent.match(allPathsPattern) ?? [];
+        // Filter paths that contain "L100 100" or "L 100 100" (lines to center)
+        const sectorPaths = allPaths.filter(p => {
+            const dMatch = p.match(/d="([^"]+)"/);
+            if (!dMatch?.[1])
+                return false;
+            const d = dMatch[1];
+            return /L\s*100\s+100/.test(d);
+        });
+        if (sectorPaths.length === 0)
+            return null;
+        // Count colored (filled) sectors vs total sectors
+        const coloredSectors = sectorPaths.filter(p => /#(?:49C0F8|1CB0F6)/i.test(p));
+        const totalSectors = sectorPaths.length;
+        const numerator = coloredSectors.length;
+        if (totalSectors > 0 && numerator > 0) {
+            logger.debug('extractPieChartFraction: (method 3) sector paths - colored:', numerator, 'total:', totalSectors);
+            return {
+                numerator,
+                denominator: totalSectors,
+                value: numerator / totalSectors,
+            };
+        }
+        return null;
+    }
+    /**
      * Извлекает дробь из круговой диаграммы SVG
      *
      * @param svgContent - содержимое SVG или srcdoc iframe
@@ -3346,7 +3378,7 @@ var AutoDuo = (function (exports) {
     function extractPieChartFraction(svgContent) {
         if (!svgContent)
             return null;
-        const svg = extractSvgContent(svgContent);
+        const svg = extractSvgContent$1(svgContent);
         // Try method 1: colored/uncolored sectors
         const result1 = extractByColoredSectors(svg);
         if (result1)
@@ -3355,6 +3387,10 @@ var AutoDuo = (function (exports) {
         const result2 = extractByCircleAndPaths(svg);
         if (result2)
             return result2;
+        // Try method 3: sector paths without circle (pie chart drawn with paths only)
+        const result3 = extractBySectorPaths(svg);
+        if (result3)
+            return result3;
         logger.debug('extractPieChartFraction: no pie sectors found');
         return null;
     }
@@ -3367,14 +3403,16 @@ var AutoDuo = (function (exports) {
         // First, exclude block diagrams (they have rect elements)
         const hasRects = /<rect[^>]*>/i.test(svgContent);
         if (hasRects) {
-            // Block diagrams have rects, pie charts don't
+            // Block diagrams and grids have rects, pie charts don't
             return false;
         }
         // Pie charts typically have colored paths or circles
         const hasColoredPaths = /#(?:49C0F8|1CB0F6)/i.test(svgContent);
         const hasCircle = /<circle/i.test(svgContent);
-        const hasPaths = /<path[^>]*stroke[^>]*>/i.test(svgContent);
-        return (hasColoredPaths && hasPaths) || hasCircle;
+        const hasPaths = /<path[^>]*>/i.test(svgContent);
+        // Check for sector paths (paths with L100 100 - lines to center)
+        const hasSectorPaths = /L\s*100\s+100/.test(svgContent);
+        return (hasColoredPaths && hasPaths) || hasCircle || (hasSectorPaths && hasColoredPaths);
     }
 
     /**
@@ -3644,6 +3682,99 @@ var AutoDuo = (function (exports) {
     }
 
     /**
+     * Парсер для сеточных диаграмм (grid diagrams)
+     *
+     * Сеточные диаграммы показывают прямоугольную сетку ячеек,
+     * где некоторые ячейки закрашены для визуализации дробей.
+     */
+    /**
+     * Извлекает часть SVG для анализа (предпочитает dark-img)
+     */
+    function extractSvgContent(srcdoc) {
+        // Prefer dark-img since Duolingo Math often uses dark theme
+        const darkImgMatch = srcdoc.match(/<span class="dark-img">([\s\S]*?)<\/span>/);
+        if (darkImgMatch?.[1]) {
+            logger.debug('extractGridFraction: using dark-img SVG');
+            return darkImgMatch[1];
+        }
+        // Fallback to light-img
+        const lightImgMatch = srcdoc.match(/<span class="light-img">([\s\S]*?)<\/span>/);
+        if (lightImgMatch?.[1]) {
+            logger.debug('extractGridFraction: using light-img SVG');
+            return lightImgMatch[1];
+        }
+        return srcdoc;
+    }
+    /**
+     * Извлекает дробь из сеточной диаграммы SVG
+     *
+     * Сеточные диаграммы используются в заданиях для визуализации дробей.
+     * Каждая ячейка сетки = 1 единица.
+     *
+     * @param srcdoc - srcdoc атрибут iframe с SVG
+     * @returns объект с дробью или null
+     *
+     * @example
+     * // SVG с сеткой 3x3, где 6 ячеек закрашены
+     * extractGridFraction(srcdoc) // { numerator: 6, denominator: 9, value: 0.666... }
+     */
+    function extractGridFraction(srcdoc) {
+        if (!srcdoc)
+            return null;
+        const svgContent = extractSvgContent(srcdoc);
+        // IMPORTANT: Exclude pie charts (they have paths to center L100 100)
+        // Pie charts have sector paths, grids don't
+        if (/L\s*100\s+100/.test(svgContent)) {
+            logger.debug('extractGridFraction: skipping - detected pie chart (L100 100)');
+            return null;
+        }
+        // Count all path elements with fill color (grid cells as paths)
+        const allPaths = svgContent.match(/<path[^>]*fill=["'][^"']+["'][^>]*>/gi) ?? [];
+        // Count all rect elements with fill color (grid cells as rects)
+        const allRects = svgContent.match(/<rect[^>]*fill=["'][^"']+["'][^>]*>/gi) ?? [];
+        const totalCells = allPaths.length + allRects.length;
+        if (totalCells === 0) {
+            logger.debug('extractGridFraction: no grid cells found');
+            return null;
+        }
+        // Count colored (blue) cells
+        const coloredPaths = allPaths.filter(p => /#(?:49C0F8|1CB0F6)/i.test(p));
+        const coloredRects = allRects.filter(r => /#(?:49C0F8|1CB0F6)/i.test(r));
+        const coloredCells = coloredPaths.length + coloredRects.length;
+        if (coloredCells === 0) {
+            logger.debug('extractGridFraction: no colored cells found');
+            return null;
+        }
+        logger.debug('extractGridFraction: colored =', coloredCells, 'total =', totalCells);
+        return {
+            numerator: coloredCells,
+            denominator: totalCells,
+            value: coloredCells / totalCells,
+        };
+    }
+    /**
+     * Проверяет, содержит ли srcdoc сеточную диаграмму
+     */
+    function isGridDiagram(srcdoc) {
+        if (!srcdoc)
+            return false;
+        const svgContent = extractSvgContent(srcdoc);
+        // Grids have rect or path elements with fill colors
+        const hasColoredElements = /#(?:49C0F8|1CB0F6)/i.test(svgContent);
+        const hasRects = /<rect[^>]*>/i.test(svgContent);
+        const hasPaths = /<path[^>]*>/i.test(svgContent);
+        // Exclude pie charts (they have sector paths with L100 100)
+        const isPieChart = /L\s*100\s+100/.test(svgContent);
+        if (isPieChart)
+            return false;
+        // Grids typically have multiple rect or path elements
+        const rectCount = (svgContent.match(/<rect[^>]*>/gi) ?? []).length;
+        const pathCount = (svgContent.match(/<path[^>]*>/gi) ?? []).length;
+        // A grid should have multiple cells (at least 4, typically 9 for 3x3 or more)
+        return hasColoredElements && (hasRects || hasPaths) && (rectCount + pathCount >= 4);
+    }
+
+    /**
      * Солвер для заданий "Match the pairs"
      * Сопоставляет элементы по значениям: дроби, pie charts, округление
      */
@@ -3777,12 +3908,12 @@ var AutoDuo = (function (exports) {
                         }
                     }
                 }
-                // Check for iframe with block diagram or pie chart
+                // Check for iframe with block diagram, grid, or pie chart
                 const iframe = token.querySelector('iframe[title="Math Web Element"]');
                 if (iframe && !nearestLabel) {
                     const srcdoc = iframe.getAttribute('srcdoc');
                     if (srcdoc?.includes('<svg')) {
-                        // First check for block diagram (has rect elements)
+                        // First check for block diagram (columns of blocks)
                         if (isBlockDiagram(srcdoc)) {
                             const blockCount = extractBlockDiagramValue(srcdoc);
                             if (blockCount !== null) {
@@ -3793,6 +3924,21 @@ var AutoDuo = (function (exports) {
                                     rawValue: `${blockCount} blocks`,
                                     numericValue: blockCount,
                                     isBlockDiagram: true,
+                                });
+                                continue;
+                            }
+                        }
+                        // Then check for grid diagram (grid of cells)
+                        if (isGridDiagram(srcdoc)) {
+                            const gridFraction = extractGridFraction(srcdoc);
+                            if (gridFraction) {
+                                this.log('token', i, 'extracted grid diagram:', gridFraction.value);
+                                tokens.push({
+                                    index: i,
+                                    element: token,
+                                    rawValue: `${gridFraction.numerator}/${gridFraction.denominator} (grid)`,
+                                    numericValue: gridFraction.value,
+                                    isPieChart: true, // Treat as visual fraction
                                 });
                                 continue;
                             }
@@ -6946,6 +7092,7 @@ var AutoDuo = (function (exports) {
     exports.evaluateMathExpression = evaluateMathExpression;
     exports.extractAnnotationText = extractAnnotationText;
     exports.extractBlockDiagramValue = extractBlockDiagramValue;
+    exports.extractGridFraction = extractGridFraction;
     exports.extractKatexNumber = extractKatexNumber;
     exports.extractKatexValue = extractKatexValue;
     exports.extractLatexContent = extractLatexContent;
@@ -6961,6 +7108,7 @@ var AutoDuo = (function (exports) {
     exports.isBlockDiagram = isBlockDiagram;
     exports.isDigitsOnly = isDigitsOnly;
     exports.isFractionString = isFractionString;
+    exports.isGridDiagram = isGridDiagram;
     exports.isIncorrect = isIncorrect;
     exports.isNumber = isNumber;
     exports.isOnHomePage = isOnHomePage;

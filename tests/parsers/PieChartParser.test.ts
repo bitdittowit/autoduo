@@ -53,6 +53,27 @@ describe('PieChartParser', () => {
             // Should detect as 1/4 based on path analysis
             expect(result).not.toBeNull();
         });
+
+        it('should extract fraction from sector paths without circle', () => {
+            // Pie chart drawn only with path elements (no circle)
+            const svg = `
+                <span class="dark-img">
+                    <svg>
+                        <path d="M15 51C23 36 36 23 51 15L100 100" fill="#49C0F8" />
+                        <path d="M100 2C117 2 134 6 149 15L100 100" fill="#49C0F8" />
+                        <path d="M184 51C193 65 198 82 198 100L100 100" fill="#49C0F8" />
+                        <path d="M184 149C176 163 163 176 149 184L100 100" fill="#FFFFFF" />
+                        <path d="M100 198C82 198 65 193 50 184L100 100" fill="#FFFFFF" />
+                        <path d="M15 149C6 134 2 117 2 100L100 100" fill="#FFFFFF" />
+                    </svg>
+                </span>
+            `;
+            const result = extractPieChartFraction(svg);
+            expect(result).toBeDefined();
+            expect(result?.numerator).toBe(3);
+            expect(result?.denominator).toBe(6);
+            expect(result?.value).toBe(0.5);
+        });
     });
 
     describe('isPieChart', () => {

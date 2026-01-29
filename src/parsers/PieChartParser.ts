@@ -119,6 +119,45 @@ function extractByCircleAndPaths(svgContent: string): ISimplifiedFraction | null
 }
 
 /**
+ * Метод 3: Анализ секторных путей (pie chart без <circle> элемента)
+ * Используется для круговых диаграмм, нарисованных только path-элементами
+ */
+function extractBySectorPaths(svgContent: string): ISimplifiedFraction | null {
+    // Look for paths that form pie sectors (go to center point, typically L100 100)
+    const allPathsPattern = /<path[^>]*d="[^"]*"[^>]*>/g;
+    const allPaths = svgContent.match(allPathsPattern) ?? [];
+
+    // Filter paths that contain "L100 100" or "L 100 100" (lines to center)
+    const sectorPaths = allPaths.filter(p => {
+        const dMatch = p.match(/d="([^"]+)"/);
+        if (!dMatch?.[1]) return false;
+        const d = dMatch[1];
+        return /L\s*100\s+100/.test(d);
+    });
+
+    if (sectorPaths.length === 0) return null;
+
+    // Count colored (filled) sectors vs total sectors
+    const coloredSectors = sectorPaths.filter(p =>
+        /#(?:49C0F8|1CB0F6)/i.test(p), // Duolingo blue colors
+    );
+
+    const totalSectors = sectorPaths.length;
+    const numerator = coloredSectors.length;
+
+    if (totalSectors > 0 && numerator > 0) {
+        logger.debug('extractPieChartFraction: (method 3) sector paths - colored:', numerator, 'total:', totalSectors);
+        return {
+            numerator,
+            denominator: totalSectors,
+            value: numerator / totalSectors,
+        };
+    }
+
+    return null;
+}
+
+/**
  * Извлекает дробь из круговой диаграммы SVG
  *
  * @param svgContent - содержимое SVG или srcdoc iframe
@@ -141,6 +180,10 @@ export function extractPieChartFraction(svgContent: string | null): ISimplifiedF
     const result2 = extractByCircleAndPaths(svg);
     if (result2) return result2;
 
+    // Try method 3: sector paths without circle (pie chart drawn with paths only)
+    const result3 = extractBySectorPaths(svg);
+    if (result3) return result3;
+
     logger.debug('extractPieChartFraction: no pie sectors found');
     return null;
 }
@@ -154,14 +197,17 @@ export function isPieChart(svgContent: string): boolean {
     // First, exclude block diagrams (they have rect elements)
     const hasRects = /<rect[^>]*>/i.test(svgContent);
     if (hasRects) {
-        // Block diagrams have rects, pie charts don't
+        // Block diagrams and grids have rects, pie charts don't
         return false;
     }
 
     // Pie charts typically have colored paths or circles
     const hasColoredPaths = /#(?:49C0F8|1CB0F6)/i.test(svgContent);
     const hasCircle = /<circle/i.test(svgContent);
-    const hasPaths = /<path[^>]*stroke[^>]*>/i.test(svgContent);
+    const hasPaths = /<path[^>]*>/i.test(svgContent);
 
-    return (hasColoredPaths && hasPaths) || hasCircle;
+    // Check for sector paths (paths with L100 100 - lines to center)
+    const hasSectorPaths = /L\s*100\s+100/.test(svgContent);
+
+    return (hasColoredPaths && hasPaths) || hasCircle || (hasSectorPaths && hasColoredPaths);
 }
