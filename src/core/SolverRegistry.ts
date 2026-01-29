@@ -30,6 +30,7 @@ import { BlockDiagramChoiceSolver } from '../solvers/BlockDiagramChoiceSolver';
 import { BlockDiagramTextInputSolver } from '../solvers/BlockDiagramTextInputSolver';
 import { SolveForXSolver } from '../solvers/SolveForXSolver';
 import { FractionToDecimalChoiceSolver } from '../solvers/FractionToDecimalChoiceSolver';
+import { RatioChoiceSolver } from '../solvers/RatioChoiceSolver';
 
 /**
  * Регистр солверов - выбирает подходящий солвер для задания
@@ -92,6 +93,7 @@ export class SolverRegistry {
         this.register(new ExpressionBuildSolver());
         this.register(new InteractiveSpinnerSolver());
         this.register(new FactorTreeSolver());
+        this.register(new RatioChoiceSolver()); // Must be before MatchPairs and PatternTable
         this.register(new MatchPairsSolver());
         this.register(new PatternTableSolver());
 
