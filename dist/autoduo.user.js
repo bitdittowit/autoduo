@@ -848,11 +848,28 @@ var AutoDuo = (function (exports) {
     function countHundredBlocks(svgContent) {
         const allPaths = svgContent.match(/<path[^>]*>/gi) ?? [];
         let count = 0;
+        // Method 1: Old style hundred blocks with clip-rule="evenodd"
         for (const pathTag of allPaths) {
             const hasClipRule = /clip-rule=["']evenodd["']/i.test(pathTag);
             const hasFillColor = /fill=["']#(?:1CB0F6|49C0F8)["']/i.test(pathTag);
             if (hasClipRule && hasFillColor) {
                 count += 100;
+            }
+        }
+        // Method 2: New style hundred blocks with large rounded rect borders
+        // These have: <rect height="222" rx="19" ...> or similar (boundaries of 100-block)
+        // Typically height ~200-250 and rx (rounded corners) indicates hundred block boundary
+        const largeRects = svgContent.match(/<rect[^>]*height=["'](\d+)["'][^>]*rx=["'](\d+)["'][^>]*>/gi) ?? [];
+        for (const rectTag of largeRects) {
+            const heightMatch = rectTag.match(/height=["'](\d+)["']/);
+            const rxMatch = rectTag.match(/rx=["'](\d+)["']/);
+            if (heightMatch?.[1] && rxMatch?.[1]) {
+                const height = parseInt(heightMatch[1]);
+                const rx = parseInt(rxMatch[1]);
+                // Large rounded rect with height 200-250 and rx 15-25 indicates hundred block
+                if (height >= 200 && height <= 250 && rx >= 15 && rx <= 25) {
+                    count += 100;
+                }
             }
         }
         return count;
@@ -906,6 +923,7 @@ var AutoDuo = (function (exports) {
         }
         // Count "hundred block" structures first
         const hundredBlocks = countHundredBlocks(svgContent);
+        logger.debug('extractBlockDiagramValue: countHundredBlocks returned', hundredBlocks);
         if (hundredBlocks > 0) {
             logger.debug('extractBlockDiagramValue: found hundred-block structures =', hundredBlocks);
         }
@@ -913,6 +931,7 @@ var AutoDuo = (function (exports) {
         // Each column of 10 blocks has: 2 <path> (top/bottom rounded) + 8 <rect> (middle) = 10 total
         // So we count ALL elements (rect + simple path), and each element = 1 block
         const regularBlocks = countRegularBlocks(svgContent);
+        logger.debug('extractBlockDiagramValue: countRegularBlocks returned', regularBlocks);
         if (regularBlocks > 0) {
             const total = regularBlocks + hundredBlocks;
             logger.debug('extractBlockDiagramValue: regular =', regularBlocks, '+ hundreds =', hundredBlocks, '=', total);
