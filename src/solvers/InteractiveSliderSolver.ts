@@ -372,6 +372,37 @@ export class InteractiveSliderSolver extends BaseSolver {
                     }
                 }
             }
+
+            // Equation with variable like "16-3=X" or "X=16-3"
+            if (text.includes('=') && /[XYZ]/.test(text)) {
+                // Clean the text
+                const cleanText = text
+                    .replace(/\\mathbf\{([^}]+)\}/g, '$1')
+                    .replace(/\\textbf\{([^}]+)\}/g, '$1')
+                    .replace(/\s+/g, '');
+
+                // Try "expression = X" format
+                let match = cleanText.match(/^([^=]+)=([XYZ])$/);
+                if (match) {
+                    const leftSide = match[1];
+                    const result = evaluateMathExpression(leftSide);
+                    if (result !== null) {
+                        this.log('solved equation (expr=X):', cleanText, '→', result);
+                        return { value: result, equation: text };
+                    }
+                }
+
+                // Try "X = expression" format
+                match = cleanText.match(/^([XYZ])=([^=]+)$/);
+                if (match) {
+                    const rightSide = match[2];
+                    const result = evaluateMathExpression(rightSide);
+                    if (result !== null) {
+                        this.log('solved equation (X=expr):', cleanText, '→', result);
+                        return { value: result, equation: text };
+                    }
+                }
+            }
         }
 
         return null;
