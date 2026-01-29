@@ -24,7 +24,7 @@ export interface IRoundingResult extends ISolverResult {
  * Результат солвера уравнений
  */
 export interface IEquationResult extends ISolverResult {
-    type: 'typeAnswer' | 'equationBlank';
+    type: 'typeAnswer' | 'equationBlank' | 'solveForX';
     equation: string;
     answer: number | string;
 }

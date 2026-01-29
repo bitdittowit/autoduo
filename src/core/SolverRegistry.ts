@@ -28,6 +28,7 @@ import { PatternTableSolver } from '../solvers/PatternTableSolver';
 import { PieChartSelectFractionSolver } from '../solvers/PieChartSelectFractionSolver';
 import { BlockDiagramChoiceSolver } from '../solvers/BlockDiagramChoiceSolver';
 import { BlockDiagramTextInputSolver } from '../solvers/BlockDiagramTextInputSolver';
+import { SolveForXSolver } from '../solvers/SolveForXSolver';
 
 /**
  * Регистр солверов - выбирает подходящий солвер для задания
@@ -108,6 +109,7 @@ export class SolverRegistry {
         this.register(new PieChartTextInputSolver());
         this.register(new PieChartSelectFractionSolver());
         this.register(new SelectPieChartSolver());
+        this.register(new SolveForXSolver()); // Solve for X with choices (before EquationBlankSolver)
         this.register(new EquationBlankSolver());
 
         // Generic solvers last (catch-all)
